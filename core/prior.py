@@ -3,7 +3,7 @@ prior.py
 ========
 Constructs the Gaussian prior distribution over the parameter vector b
 for a given model order N, and estimates the maximum non-dimensional
-impulse response horizon t_max used for signal preparation.
+impulse response horizon t_max used for signals preparation.
 
 Parameter ordering within b:
     b = [n_1, gamma_1, beta_1, n_2, gamma_2, beta_2, ...]

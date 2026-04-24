@@ -179,7 +179,7 @@ def estimate_posterior(signals    : dict,
 
     Parameters
     ----------
-    signals    : dict           Prepared signal struct from prepare_signals.
+    signals    : dict           Prepared signals struct from prepare_signals.
     bp         : jnp.ndarray   Prior mean, shape (3N,).
     Cp         : jnp.ndarray   Prior covariance, shape (3N, 3N).
     T_c        : float          Convective timescale [s].
@@ -246,7 +246,7 @@ def estimate_posterior(signals    : dict,
         raise RuntimeError(
             f"Hessian at MAP is not positive definite for N={N}. "
             f"Cannot compute posterior covariance. "
-            f"Consider increasing the signal length or adjusting the prior.")
+            f"Consider increasing the signals length or adjusting the prior.")
 
     # ------------------------------------------------------------------
     # Model scoring  (eq. 21)
@@ -319,7 +319,7 @@ def rank_models(signals    : dict,
 
     Parameters
     ----------
-    signals      : dict           Prepared signal struct.
+    signals      : dict           Prepared signals struct.
     T_c          : float          Convective timescale [s].
     prior_cfg    : PriorConfig    Prior configuration.
     opt_cfg      : OptimizerConfig Optimizer configuration.
@@ -353,7 +353,7 @@ def rank_models(signals    : dict,
 
         # Re-prepare signals with order-specific T_h
         # (signals must be re-prepared per order when T_h varies)
-        from signal.prepare import prepare_signals
+        from signals.prepare import prepare_signals
         sig = prepare_signals(
             np.array(signals['fine']['u']),
             np.array(signals['fine']['q']),

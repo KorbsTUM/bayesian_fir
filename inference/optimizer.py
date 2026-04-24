@@ -295,7 +295,7 @@ def run_one_restart(x0         : jnp.ndarray,
     ----------
     x0       : jnp.ndarray, shape (2N,)   Initial nonlinear parameters.
     Ce0      : float                       Initial noise variance.
-    signals  : dict                        Prepared signal struct.
+    signals  : dict                        Prepared signals struct.
     bp       : jnp.ndarray, shape (3N,)   Prior mean.
     Cp       : jnp.ndarray, shape (3N,3N) Prior covariance.
     T_c      : float                       Convective timescale.

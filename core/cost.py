@@ -70,7 +70,7 @@ def _valid_convolution(u: jnp.ndarray,
 
     Parameters
     ----------
-    u  : jnp.ndarray, shape (M,)   Input signal.
+    u  : jnp.ndarray, shape (M,)   Input signals.
     h  : jnp.ndarray, shape (L,)   Impulse response.
     dt : float                      Sampling interval [s].
 
@@ -277,7 +277,7 @@ def calculate_cost_varpro(signals: dict,
 
     Parameters
     ----------
-    signals    : dict    - Prepared signal struct.
+    signals    : dict    - Prepared signals struct.
     Ce         : float   - Data noise variance.
     x          : jnp.ndarray, shape (2N,)
                  Nonlinear parameter vector [gamma_1, beta_1, gamma_2, ...].

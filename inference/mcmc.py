@@ -176,7 +176,7 @@ def make_log_posterior(signals    : dict,
 
     Parameters
     ----------
-    signals   : dict         Prepared signal struct.
+    signals   : dict         Prepared signals struct.
     Ce        : float        Fixed noise variance (MAP estimate).
     bp        : jnp.ndarray  Prior mean, shape (3N,).
     Cp        : jnp.ndarray  Prior covariance, shape (3N, 3N).
@@ -468,7 +468,7 @@ def run_mcmc_from_posterior(posterior,
     Parameters
     ----------
     posterior  : PosteriorResult   Output of estimate_posterior.
-    signals    : dict              Prepared signal struct.
+    signals    : dict              Prepared signals struct.
     bp         : jnp.ndarray       Prior mean.
     Cp         : jnp.ndarray       Prior covariance.
     T_c        : float             Convective timescale [s].

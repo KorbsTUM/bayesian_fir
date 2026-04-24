@@ -1,13 +1,13 @@
 """
-signal/prepare.py
+signals/prepare.py
 =================
 Prepares input/output time-series signals for Bayesian impulse response
 inference.
 
 Responsibilities:
-    1. Estimate the signal bandwidth from the input PSD and compute an
+    1. Estimate the signals bandwidth from the input PSD and compute an
        appropriate integer downsampling factor.
-    2. Apply anti-aliased downsampling via scipy.signal.resample_poly with
+    2. Apply anti-aliased downsampling via scipy.signals.resample_poly with
        symmetric edge padding to suppress boundary artefacts.
     3. Package both the downsampled ('coarse') and original-resolution
        ('fine') signals into a nested dict consumed by calculate_cost and
@@ -22,8 +22,8 @@ The 'fine' signals are retained for diagnostic evaluation at full resolution.
 Signal dict layout (one entry per level: 'coarse' / 'fine'):
 
     signals['coarse'] = {
-        'u'     : jnp.ndarray (M,)     input signal
-        'q'     : jnp.ndarray (M,)     output signal
+        'u'     : jnp.ndarray (M,)     input signals
+        'q'     : jnp.ndarray (M,)     output signals
         'fs'    : float                 sampling frequency [Hz]
         'dt'    : float                 sampling interval  [s]
         't'     : jnp.ndarray (M,)     time vector        [s]
@@ -35,7 +35,7 @@ Signal dict layout (one entry per level: 'coarse' / 'fine'):
     }
 
 Notes:
-    - All heavy signal processing (FFT, resampling) is done in NumPy/SciPy
+    - All heavy signals processing (FFT, resampling) is done in NumPy/SciPy
       since it runs once and does not need to be JIT-compiled.
     - Only the final packaged arrays are converted to jnp for use in JAX.
     - The 'valid' entry is a Python int (static), not a JAX array, so it
@@ -61,14 +61,14 @@ def prepare_signals(u: np.ndarray,
                     T_h: float,
                     ds_limit: Optional[int] = None) -> dict:
     """
-    Prepare coarse and fine signal representations for inference.
+    Prepare coarse and fine signals representations for inference.
 
     Parameters
     ----------
     u        : np.ndarray, shape (M,)
-        Input fluctuation signal (zero-mean, normalised).
+        Input fluctuation signals (zero-mean, normalised).
     q        : np.ndarray, shape (M,)
-        Output fluctuation signal (zero-mean, normalised).
+        Output fluctuation signals (zero-mean, normalised).
     fs       : float
         Original sampling frequency [Hz].
     T_h      : float
@@ -81,7 +81,7 @@ def prepare_signals(u: np.ndarray,
     -------
     signals : dict
         Nested dict with keys 'coarse' and 'fine', each containing
-        the packaged signal struct described in the module docstring.
+        the packaged signals struct described in the module docstring.
     """
     u = np.asarray(u, dtype=np.float64).ravel()
     q = np.asarray(q, dtype=np.float64).ravel()
@@ -130,7 +130,7 @@ def _estimate_bandwidth(u: np.ndarray,
                          energy_threshold: float = 0.999) -> float:
     """
     Estimate the one-sided bandwidth of u that retains `energy_threshold`
-    fraction of the total signal energy.
+    fraction of the total signals energy.
 
     The FFT is zero-padded to the next power of 2 above len(u) + n_h - 1,
     where n_h = ceil(T_h * fs) + 1 is the impulse response length in samples.
@@ -139,7 +139,7 @@ def _estimate_bandwidth(u: np.ndarray,
 
     Parameters
     ----------
-    u                : np.ndarray  Input signal.
+    u                : np.ndarray  Input signals.
     fs               : float       Sampling frequency [Hz].
     T_h              : float       Impulse response duration [s].
     energy_threshold : float       Fraction of energy to retain (default 0.999).
@@ -177,7 +177,7 @@ def _safe_resample(x: np.ndarray, ds_factor: int) -> np.ndarray:
 
     Symmetric edge-padding (N samples at each end) is applied before
     resampling to suppress the boundary artefacts that scipy's
-    resample_poly introduces at signal edges.
+    resample_poly introduces at signals edges.
 
     Parameters
     ----------
@@ -187,7 +187,7 @@ def _safe_resample(x: np.ndarray, ds_factor: int) -> np.ndarray:
     Returns
     -------
     x_ds : np.ndarray, shape (ceil(N / ds_factor),)
-        Downsampled signal.
+        Downsampled signals.
     """
     x  = x.ravel()
     N  = len(x)
@@ -198,11 +198,11 @@ def _safe_resample(x: np.ndarray, ds_factor: int) -> np.ndarray:
     pad   = np.concatenate([np.full(N, x[0]), x, np.full(N, x[-1])])
     pad_ds = resample_poly(pad, P, Q)
 
-    # Expected output length for the original signal
+    # Expected output length for the original signals
     n_out = int(np.floor(N / ds_factor)) + (1 if N % ds_factor else 0)
 
     # The padded prefix contributes floor(N / ds_factor) samples;
-    # extract the central portion corresponding to the original signal
+    # extract the central portion corresponding to the original signals
     n_pad_out = int(np.floor(N / ds_factor))
     start     = n_pad_out
     end       = start + n_out
@@ -221,7 +221,7 @@ def _package_signals(u: np.ndarray,
                       ds_factor: int,
                       T_h: float) -> dict:
     """
-    Package time-domain signals and derived quantities into a signal dict.
+    Package time-domain signals and derived quantities into a signals dict.
 
     The valid convolution region is defined as the set of output samples
     for which the full impulse response support [0, T_h] is covered by
@@ -230,8 +230,8 @@ def _package_signals(u: np.ndarray,
 
     Parameters
     ----------
-    u         : np.ndarray, shape (M,)   Input signal (possibly downsampled).
-    q         : np.ndarray, shape (M,)   Output signal.
+    u         : np.ndarray, shape (M,)   Input signals (possibly downsampled).
+    q         : np.ndarray, shape (M,)   Output signals.
     fs        : float                     Sampling frequency [Hz].
     ds_factor : int                       Downsampling factor applied.
     T_h       : float                     Impulse response duration [s].
@@ -253,7 +253,7 @@ def _package_signals(u: np.ndarray,
     valid_start = n_h - 1                       # first valid output index (0-based)
 
     # Time vectors
-    t   = np.arange(n)   * dt                  # signal time vector [s]
+    t   = np.arange(n)   * dt                  # signals time vector [s]
     t_h = np.arange(n_h) * dt                  # impulse response time vector [s]
 
     sig = {
@@ -277,7 +277,7 @@ def _package_signals(u: np.ndarray,
 
 def get_valid_output(sig: dict) -> jnp.ndarray:
     """
-    Return the valid portion of the output signal q[valid:].
+    Return the valid portion of the output signals q[valid:].
 
     Parameters
     ----------
@@ -291,12 +291,12 @@ def get_valid_output(sig: dict) -> jnp.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Convenience: reconstruct fs and signal length from a signal dict
+# Convenience: reconstruct fs and signals length from a signals dict
 # ---------------------------------------------------------------------------
 
 def signal_info(signals: dict, level: str = 'coarse') -> str:
     """
-    Return a human-readable summary of a prepared signal struct.
+    Return a human-readable summary of a prepared signals struct.
 
     Parameters
     ----------
