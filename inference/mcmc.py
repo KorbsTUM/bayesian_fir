@@ -339,7 +339,7 @@ def run_mcmc_python(log_post_fn : Callable,
     L     = np.linalg.cholesky(np.array(prop_cov))
 
     # Pre-allocate in NumPy for speed
-    chain        = np.zeros((d, n_iter), dtype=np.float32)
+    chain        = np.zeros((d, n_iter), dtype=np.float64)
     log_post_arr = np.full(n_iter, -np.inf, dtype=np.float64)
     accepted_arr = np.zeros(n_iter, dtype=bool)
 
@@ -353,7 +353,7 @@ def run_mcmc_python(log_post_fn : Callable,
         # Propose
         z       = rng.standard_normal(d)
         b_prop  = b_cur + L @ z
-        lp_prop = float(log_post_fn(jnp.array(b_prop, dtype=jnp.float32)))
+        lp_prop = float(log_post_fn(jnp.array(b_prop, dtype=jnp.float64)))
 
         if not np.isfinite(lp_prop):
             lp_prop = -np.inf

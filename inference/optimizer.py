@@ -57,7 +57,7 @@ from jax import jit, vmap
 from functools import partial
 from typing import NamedTuple
 
-from core.cost import calculate_cost_varpro, calculate_cost
+from core.cost import calculate_cost_varpro, calculate_cost, fd_hessian
 from core.prior import PriorConfig
 
 
@@ -74,38 +74,43 @@ class OptimizerConfig(NamedTuple):
 
     Attributes
     ----------
-    restart_scaling   : int    Restarts per nonlinear parameter (default 10).
-    iteration_scaling : int    Max iterations per nonlinear parameter (default 100).
-    tol_optimality    : float  Gradient norm convergence tolerance.
-    tol_step          : float  Relative step size convergence tolerance.
-    tol_fn            : float  Function change convergence tolerance.
-    lam_inc0          : float  Base lambda increment on rejected step.
-    lam_dec           : float  Base lambda decrement on accepted step.
-    lam_p             : float  Lambda scaling exponent.
-    lam_min           : float  Minimum lambda value.
-    noise_update_weight : float  Weight for joint Ce update (0.4 in MATLAB).
-    noise_update_start  : int    Iteration after which Ce updates begin.
-    use_bfgs_correction : bool   Whether to apply BFGS curvature correction.
-    use_parallel        : bool   Whether to vmap over restarts (GPU).
-    solution_selection  : str    'log_prob' or 'log_ml'.
-    infer_noise         : bool   Whether to estimate Ce from data (True) or
-                                 use a fixed value (False).
+    restart_scaling       : int    Restarts per nonlinear parameter (default 10).
+    iteration_scaling     : int    Max iterations per nonlinear parameter (default 100).
+    tol_optimality        : float  Gradient norm convergence tolerance.
+    tol_step              : float  Relative step size convergence tolerance.
+    tol_fn                : float  Function change convergence tolerance.
+    lam_inc0              : float  Base lambda increment on rejected step.
+    lam_dec               : float  Base lambda decrement on accepted step.
+    lam_p                 : float  Lambda scaling exponent.
+    lam_min               : float  Minimum lambda value.
+    cond_max              : float  Max condH before a restart is treated as
+                                   ill-conditioned and abandoned (MATLAB: 1e20).
+    noise_update_weight   : float  Weight for joint Ce update (0.4 in MATLAB).
+    noise_update_start    : int    Iteration after which Ce updates begin.
+    final_hessian_method  : str    'FD' | 'GN' | 'BFGS', matching MATLAB's
+                                   config.optimizer.finalHessianMethod.
+                                   Default 'FD', matching loadDefaultConfig.m.
+    use_parallel          : bool   Whether to vmap over restarts (GPU).
+    solution_selection    : str    'log_prob' or 'log_ml'.
+    infer_noise           : bool   Whether to estimate Ce from data (True) or
+                                   use a fixed value (False).
     """
-    restart_scaling     : int   = 10
-    iteration_scaling   : int   = 100
-    tol_optimality      : float = 1e-6
-    tol_step            : float = 1e-6
-    tol_fn              : float = 1e-8
-    lam_inc0            : float = 2.0
-    lam_dec             : float = 3.0
-    lam_p               : float = 3.0
-    lam_min             : float = 1e-8
-    noise_update_weight : float = 0.4
-    noise_update_start  : int   = 5
-    use_bfgs_correction : bool  = True
-    use_parallel        : bool  = True
-    solution_selection  : str   = 'log_prob'
-    infer_noise         : bool  = True
+    restart_scaling      : int   = 10
+    iteration_scaling    : int   = 100
+    tol_optimality       : float = 1e-5
+    tol_step              : float = 1e-10
+    tol_fn                : float = 1e-10
+    lam_inc0              : float = 2.0
+    lam_dec               : float = 3.0
+    lam_p                 : float = 3.0
+    lam_min               : float = 1e-8
+    cond_max              : float = 1e20
+    noise_update_weight   : float = 0.4
+    noise_update_start    : int   = 5
+    final_hessian_method  : str   = 'FD'
+    use_parallel          : bool  = True
+    solution_selection    : str   = 'log_prob'
+    infer_noise           : bool  = True
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +170,15 @@ def _make_lm_step(signals, bp, Cp, T_c, prior_cfg, cfg):
         # Solve trust-region subproblem: (H + lambda*I) db = -g
         # ----------------------------------------------------------------
         H_reg = H + lambda_ * I
+
+        # Bail out on an ill-conditioned Hessian, matching MATLAB's
+        # `if (condH > 1e20) || isnan(condH) ... break`. The step below
+        # is still computed (lax.while_loop cannot skip work), but
+        # ill_conditioned forces step_accepted=False and converged=True
+        # so the bad step is discarded and the restart halts.
+        condH = jnp.linalg.cond(H_reg)
+        ill_conditioned = (condH > cfg.cond_max) | jnp.isnan(condH)
+
         db    = jnp.linalg.solve(H_reg, -g)          # (2N,)
 
         predicted_improvement = 0.5 * db @ (lambda_ * db - g)
@@ -191,7 +205,7 @@ def _make_lm_step(signals, bp, Cp, T_c, prior_cfg, cfg):
         # ----------------------------------------------------------------
         # Accept / reject step
         # ----------------------------------------------------------------
-        step_accepted = rho > 0.0
+        step_accepted = (rho > 0.0) & (~ill_conditioned)
 
         # Trust region update
         scale = jnp.where(
@@ -254,6 +268,7 @@ def _make_lm_step(signals, bp, Cp, T_c, prior_cfg, cfg):
                                                 1e-12) < cfg.tol_step) |
             (jnp.abs(df_out) < cfg.tol_fn)
         ) & (k > 5)
+        converged = converged | ill_conditioned
 
         return LMState(
             x        = x_out,
@@ -470,9 +485,16 @@ def compute_final_hessian(b_map      : jnp.ndarray,
                            prior_cfg  : PriorConfig,
                            cfg        : OptimizerConfig) -> jnp.ndarray:
     """
-    Compute the full (3N x 3N) Hessian at the MAP estimate b_map,
-    optionally with the BFGS curvature correction applied to the
-    nonlinear (gamma, beta) block.
+    Compute the full (3N x 3N) Hessian at the MAP estimate b_map, using
+    the method selected by cfg.final_hessian_method (matches the
+    switch(config.optimizer.finalHessianMethod) in estimatePosterior.m):
+
+        'FD'   - finite-difference Hessian of the full cost (default,
+                 matches MATLAB's default).
+        'GN'   - plain Gauss-Newton Hessian from calculate_cost.
+        'BFGS' - Gauss-Newton Hessian with the accumulated BFGS
+                 curvature correction added to the nonlinear
+                 (gamma, beta) block.
 
     This is the Hessian used for the Laplace covariance and model scoring.
 
@@ -487,14 +509,22 @@ def compute_final_hessian(b_map      : jnp.ndarray,
     -------
     H_full : jnp.ndarray, shape (3N, 3N)
     """
-    # Full GN Hessian at b_map
+    if cfg.final_hessian_method == 'FD':
+        return fd_hessian(signals, Ce, b_map, bp, Cp, T_c, prior_cfg)
+
+    # Full GN Hessian at b_map, needed by both 'GN' and 'BFGS'
     _, _, H_full, _, _, _ = calculate_cost(
         signals, Ce, b_map, bp, Cp, T_c, prior_cfg)
 
-    if not cfg.use_bfgs_correction:
+    if cfg.final_hessian_method == 'GN':
         return H_full
 
-    # Apply BFGS correction to the nonlinear (gamma, beta) block
+    if cfg.final_hessian_method != 'BFGS':
+        raise ValueError(
+            "final_hessian_method must be 'FD', 'GN', or 'BFGS', "
+            f"got {cfg.final_hessian_method!r}.")
+
+    # 'BFGS': apply curvature correction to the nonlinear (gamma, beta) block
     Nb = b_map.shape[0]
     N  = Nb // 3
 

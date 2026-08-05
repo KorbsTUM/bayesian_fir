@@ -28,7 +28,7 @@ import jax.numpy as jnp
 from jax import jit, vmap, jacfwd
 from functools import partial
 
-from parameter_maps import map_to_physical, unpack_b
+from core.parameter_maps import map_to_physical, unpack_b
 
 
 # ---------------------------------------------------------------------------

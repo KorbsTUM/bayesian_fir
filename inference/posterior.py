@@ -312,7 +312,9 @@ def rank_models(signals    : dict,
                 opt_cfg    : OptimizerConfig,
                 model_orders: list,
                 Ce0        : Optional[float] = None,
-                n_eval_pts : int = 500) -> tuple:
+                n_eval_pts : int = 500,
+                ds_mode    : str = 'factor',
+                ds_value   : float = 1) -> tuple:
     """
     Estimate posteriors for all candidate model orders and rank them
     by log marginal likelihood.
@@ -326,6 +328,11 @@ def rank_models(signals    : dict,
     model_orders : list of int    Candidate model orders to evaluate.
     Ce0          : float or None  Initial noise variance.
     n_eval_pts   : int            Points for impulse response evaluation.
+    ds_mode      : str            Downsampling mode, forwarded to
+                                  prepare_signals when re-preparing
+                                  signals per model order.
+    ds_value     : float          Downsampling value, forwarded to
+                                  prepare_signals.
 
     Returns
     -------
@@ -359,6 +366,8 @@ def rank_models(signals    : dict,
             np.array(signals['fine']['q']),
             signals['fine']['fs'],
             T_h,
+            ds_mode=ds_mode,
+            ds_value=ds_value,
         )
 
         result = estimate_posterior(

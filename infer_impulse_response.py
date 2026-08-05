@@ -51,12 +51,21 @@ References:
     Yoko & Polifke (2026), Algorithm 1.
 """
 
+import jax
+# Enable 64-bit precision globally. MATLAB runs entirely in double
+# precision; JAX defaults to float32 even for arrays explicitly
+# constructed with dtype=float64 unless this is set. Must happen before
+# any JAX array is created/traced, so it is set here at the top of the
+# package's entry point, before any other JAX-touching imports execute.
+jax.config.update("jax_enable_x64", True)
+
 import numpy as np
 import jax.numpy as jnp
 from dataclasses import dataclass, field
 from typing import Optional
 
 from core.prior import PriorConfig, generate_prior
+from config.defaults import PreprocConfig
 from inference.optimizer import OptimizerConfig
 from inference.posterior import (
     PosteriorResult,
@@ -82,6 +91,7 @@ class InferenceConfig:
     Attributes
     ----------
     prior    : PriorConfig       Prior hyperparameters.
+    preproc  : PreprocConfig     Signal downsampling settings.
     optimizer: OptimizerConfig   LM optimizer settings.
     run_mcmc : bool              Whether to run MCMC for the best model.
     mcmc_iter: int               Number of MCMC iterations.
@@ -90,11 +100,11 @@ class InferenceConfig:
     mcmc_seed: int               MCMC random seed.
     mcmc_scan: bool              Use JAX scan (True) or Python loop (False).
     Ce0      : float or None     Initial noise variance. None -> 1e-4.
-    ds_limit : int or None       Max downsampling factor. None -> no limit.
     n_eval_pts: int              Points for impulse response evaluation.
     verbose  : bool              Whether to print progress to stdout.
     """
     prior     : PriorConfig      = field(default_factory=PriorConfig)
+    preproc   : PreprocConfig    = field(default_factory=PreprocConfig)
     optimizer : OptimizerConfig  = field(default_factory=OptimizerConfig)
     run_mcmc  : bool             = False
     mcmc_iter : int              = 200_000
@@ -103,7 +113,6 @@ class InferenceConfig:
     mcmc_seed : int              = 0
     mcmc_scan : bool             = True
     Ce0       : Optional[float]  = None
-    ds_limit  : Optional[int]    = None
     n_eval_pts: int              = 500
     verbose   : bool             = True
 
@@ -305,7 +314,8 @@ def infer_impulse_response(u             : np.ndarray,
         # Prepare signals with order-specific T_h
         # --------------------------------------------------------------
         signals = prepare_signals(u, q, fs, T_h,
-                                   ds_limit=config.ds_limit)
+                                   ds_mode=config.preproc.DSmode,
+                                   ds_value=config.preproc.DSvalue)
 
         if config.verbose:
             sig = signals['coarse']
@@ -364,7 +374,9 @@ def infer_impulse_response(u             : np.ndarray,
             ranking.best_N, T_c, prior_cfg)
         T_h_best = t_max_best * T_c
         signals_best = prepare_signals(
-            u, q, fs, T_h_best, ds_limit=config.ds_limit)
+            u, q, fs, T_h_best,
+            ds_mode=config.preproc.DSmode,
+            ds_value=config.preproc.DSvalue)
 
         mcmc_result = run_mcmc_from_posterior(
             posterior  = best_result,

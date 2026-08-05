@@ -113,7 +113,7 @@ def generate_restart_seeds(m: jnp.ndarray,
     L = np.linalg.cholesky(C)                     # lower triangular (d, d)
     seeds = m[:, None] + L @ Z                    # (d, n_restarts)
 
-    return jnp.array(seeds, dtype=jnp.float32)
+    return jnp.array(seeds, dtype=jnp.float64)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,15 @@ Two cost functions are provided:
         linear solve, reducing the nonlinear search from 3N to 2N dims.
         Used during the inner MAP optimisation loop.
 
+Both are thin Python dispatchers around a jitted `_core` function: the
+dispatcher selects `signals[data_level]` and slices the valid region
+in plain Python, so that `data_level` (a string) and `valid` (an int
+used as a slice bound) never enter the jit trace. A single
+`static_argnums` cannot mark only *some* leaves of a dict-valued
+argument as static, so `signals` cannot be passed directly into a
+jitted function that slices by `valid`; splitting into a dispatcher +
+core avoids that entirely.
+
 Cost function structure (eq. 15, Yoko & Polifke 2026):
 
     J = J_prior + J_LFL + J_like
@@ -49,8 +58,8 @@ from jax import jit
 from functools import partial
 from typing import Optional
 
-from impulse_response import calculate_impulse_response
-from prior import PriorConfig
+from core.impulse_response import calculate_impulse_response
+from core.prior import PriorConfig
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +106,8 @@ def _mackay_noise_estimate(r: jnp.ndarray,
     Ce_ME = r^T r / (Nd - gamma)
     gamma = Nb - trace(H^{-1} * Cp^{-1})
 
-    where H = d2J is the Gauss-Newton Hessian.
+    where H = d2J is the Gauss-Newton Hessian. Matches calculateCost.m /
+    calculateCost_VarPro.m exactly: no clamping of gamma is applied.
 
     Parameters
     ----------
@@ -111,19 +121,10 @@ def _mackay_noise_estimate(r: jnp.ndarray,
     -------
     Ce_ME : jnp.ndarray, scalar
     """
-    # Cholesky of H to solve H * X = diag(inv_Cp)  efficiently
-    # We use jax.scipy.linalg.solve which is differentiable
     inv_Cp = jnp.diag(inv_Cp_diag)
-    try:
-        # Solve H * X = Cp^{-1}  =>  X = H^{-1} * Cp^{-1}
-        X     = jax.scipy.linalg.solve(d2J, inv_Cp,
-                                        assume_a='pos')
-        gamma = Nb - jnp.trace(X)
-    except Exception:
-        gamma = float(Nb)
-
-    gamma = jnp.clip(gamma, 0.0, Nd - 1.0)   # safety clamp
-    Ce_ME = (r @ r) / (Nd - gamma)
+    X      = jax.scipy.linalg.solve(d2J, inv_Cp, assume_a='pos')
+    gamma  = Nb - jnp.trace(X)
+    Ce_ME  = (r @ r) / (Nd - gamma)
     return Ce_ME
 
 
@@ -131,7 +132,6 @@ def _mackay_noise_estimate(r: jnp.ndarray,
 # Full cost:  J(b)
 # ---------------------------------------------------------------------------
 
-@partial(jit, static_argnums=(6,))
 def calculate_cost(signals: dict,
                    Ce: float,
                    b: jnp.ndarray,
@@ -171,15 +171,27 @@ def calculate_cost(signals: dict,
     J_like : jnp.ndarray, scalar   Likelihood contribution to J.
     p      : jnp.ndarray, (Nd,)   Predicted output over valid region.
     """
-    # Unpack signals
     sig    = signals[data_level]
     u      = sig['u']
-    q      = sig['q']
-    valid  = sig['valid']          # slice or index array
-    q_v    = q[valid]              # truncate to valid region
-    t_h_nd = sig['t_h'] / T_c     # non-dimensional impulse response time
+    q_v    = sig['q'][sig['valid']:]        # truncate to valid region
+    t_h_nd = sig['t_h'] / T_c               # non-dimensional impulse response time
     dt     = sig['dt']
 
+    return _calculate_cost_core(u, q_v, t_h_nd, dt, Ce, b, bp, Cp, T_c, prior_cfg)
+
+
+@partial(jit, static_argnums=(9,))
+def _calculate_cost_core(u: jnp.ndarray,
+                          q_v: jnp.ndarray,
+                          t_h_nd: jnp.ndarray,
+                          dt: float,
+                          Ce: float,
+                          b: jnp.ndarray,
+                          bp: jnp.ndarray,
+                          Cp: jnp.ndarray,
+                          T_c: float,
+                          prior_cfg: PriorConfig) -> tuple:
+    """Jitted core of calculate_cost. See calculate_cost for parameter docs."""
     Nd = q_v.shape[0]
     Nb = b.shape[0]
 
@@ -260,7 +272,6 @@ def calculate_cost(signals: dict,
 # VarPro cost:  J(x),  n solved analytically
 # ---------------------------------------------------------------------------
 
-@partial(jit, static_argnums=(6,))
 def calculate_cost_varpro(signals: dict,
                            Ce: float,
                            x: jnp.ndarray,
@@ -297,15 +308,28 @@ def calculate_cost_varpro(signals: dict,
     p      : (Nd,)    Predicted output.
     b_out  : (3N,)    Full parameter vector with projected n.
     """
-    # Unpack signals
     sig    = signals[data_level]
     u      = sig['u']
-    q      = sig['q']
-    valid  = sig['valid']
-    q_v    = q[valid]
+    q_v    = sig['q'][sig['valid']:]
     t_h_nd = sig['t_h'] / T_c
     dt     = sig['dt']
 
+    return _calculate_cost_varpro_core(
+        u, q_v, t_h_nd, dt, Ce, x, bp, Cp, T_c, prior_cfg)
+
+
+@partial(jit, static_argnums=(9,))
+def _calculate_cost_varpro_core(u: jnp.ndarray,
+                                 q_v: jnp.ndarray,
+                                 t_h_nd: jnp.ndarray,
+                                 dt: float,
+                                 Ce: float,
+                                 x: jnp.ndarray,
+                                 bp: jnp.ndarray,
+                                 Cp: jnp.ndarray,
+                                 T_c: float,
+                                 prior_cfg: PriorConfig) -> tuple:
+    """Jitted core of calculate_cost_varpro. See calculate_cost_varpro for parameter docs."""
     Nd = q_v.shape[0]
     Nx = x.shape[0]
     N  = Nx // 2
@@ -395,7 +419,6 @@ def calculate_cost_varpro(signals: dict,
     # -----------------------------------------------------------------------
     _, dhdb, _, _ = calculate_impulse_response(b_out, t_h_nd, T_c)
 
-    p = _valid_convolution(u, dhdb @ jnp.zeros(Nb), dt)  # placeholder shape
     p = A @ n_MAP                                         # (Nd,) via design matrix
 
     r = p - q_v                                           # (Nd,)
@@ -431,23 +454,16 @@ def calculate_cost_varpro(signals: dict,
     d2J = jnp.diag(inv_Cx) + d2J_like                    # (2N, 2N)
 
     # -----------------------------------------------------------------------
-    # MacKay MML noise estimate (separate gamma_x and gamma_n contributions)
+    # MacKay MML noise estimate (separate gamma_x and gamma_n contributions,
+    # matching calculateCost_VarPro.m exactly: no clamping is applied)
     # -----------------------------------------------------------------------
-    # Effective nonlinear parameters
-    Ce_ME_x = _mackay_noise_estimate(r, d2J, inv_Cx, Nd, Nx)
+    X_n     = jnp.linalg.solve(Hn, jnp.diag(inv_Cn))
+    gamma_n = N - jnp.trace(X_n)
 
-    # Effective linear parameters (from Hn)
-    X_n       = jnp.linalg.solve(Hn, jnp.diag(inv_Cn))
-    gamma_n   = N - jnp.trace(X_n)
-    gamma_n   = jnp.clip(gamma_n, 0.0, float(N))
-
-    # Effective nonlinear parameters
-    X_x       = jax.scipy.linalg.solve(d2J, jnp.diag(inv_Cx), assume_a='pos')
-    gamma_x   = Nx - jnp.trace(X_x)
-    gamma_x   = jnp.clip(gamma_x, 0.0, float(Nx))
+    X_x     = jax.scipy.linalg.solve(d2J, jnp.diag(inv_Cx), assume_a='pos')
+    gamma_x = Nx - jnp.trace(X_x)
 
     gamma_tot = gamma_n + gamma_x
-    gamma_tot = jnp.clip(gamma_tot, 0.0, Nd - 1.0)
     Ce_ME     = (r @ r) / (Nd - gamma_tot)
 
     return J, dJ, d2J, Ce_ME, J_like, p, b_out
@@ -480,8 +496,6 @@ def fd_hessian(signals: dict,
     -------
     H : jnp.ndarray, shape (3N, 3N)
     """
-    Nb = b.shape[0]
-
     def neg_log_post(b_):
         J, _, _, _, _, _ = calculate_cost(
             signals, Ce, b_, bp, Cp, T_c, prior_cfg, data_level)

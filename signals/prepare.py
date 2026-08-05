@@ -5,8 +5,17 @@ Prepares input/output time-series signals for Bayesian impulse response
 inference.
 
 Responsibilities:
-    1. Estimate the signals bandwidth from the input PSD and compute an
-       appropriate integer downsampling factor.
+    1. Compute an integer downsampling factor from config.preproc.DSmode /
+       DSvalue (matches the active switch in prepareSignals.m: 'factor'
+       uses DSvalue directly, 'frequency' divides fs by DSvalue, 'rate'
+       multiplies fs by DSvalue). The default ('factor', 1) means no
+       downsampling, matching loadDefaultConfig.m.
+
+       Note: prepareSignals.m also contains a commented-out "legacy v1.0"
+       block that estimates a bandwidth from the input PSD and derives
+       ds_factor from it. That block is inactive in the current MATLAB
+       source (kept only as a future-reference comment) and is
+       intentionally not ported here, to match current MATLAB behaviour.
     2. Apply anti-aliased downsampling via scipy.signals.resample_poly with
        symmetric edge padding to suppress boundary artefacts.
     3. Package both the downsampled ('coarse') and original-resolution
@@ -48,7 +57,6 @@ References:
 import numpy as np
 import jax.numpy as jnp
 from scipy.signal import resample_poly
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +67,8 @@ def prepare_signals(u: np.ndarray,
                     q: np.ndarray,
                     fs: float,
                     T_h: float,
-                    ds_limit: Optional[int] = None) -> dict:
+                    ds_mode: str = 'factor',
+                    ds_value: float = 1) -> dict:
     """
     Prepare coarse and fine signals representations for inference.
 
@@ -73,9 +82,18 @@ def prepare_signals(u: np.ndarray,
         Original sampling frequency [Hz].
     T_h      : float
         Desired impulse response duration [s].
-    ds_limit : int or None
-        Maximum allowed downsampling factor (config.preproc.DSlimit).
-        None means no limit.
+    ds_mode  : str
+        How ds_value is interpreted (config.preproc.DSmode):
+            'factor'    - ds_value is used directly as the integer
+                          downsampling factor.
+            'frequency' - ds_value is a target sample rate [Hz];
+                          ds_factor = floor(fs / ds_value).
+            'rate'      - ds_value is a downsampling rate in [0, 1];
+                          ds_factor = floor(fs * ds_value).
+    ds_value : float
+        Value interpreted according to ds_mode. Default 1 with
+        ds_mode='factor' means no downsampling, matching
+        loadDefaultConfig.m.
 
     Returns
     -------
@@ -91,14 +109,17 @@ def prepare_signals(u: np.ndarray,
                          f"got {len(u)} and {len(q)}.")
 
     # ------------------------------------------------------------------
-    # Step 1: estimate bandwidth and downsampling factor
+    # Step 1: compute the integer downsampling factor from DSmode/DSvalue
     # ------------------------------------------------------------------
-    f_cut     = _estimate_bandwidth(u, fs, T_h, energy_threshold=0.999)
-    f_cut     *= 1.1                          # 10% margin
-    ds_factor = max(1, int(np.floor(fs / (2.0 * f_cut))))
-
-    if ds_limit is not None:
-        ds_factor = min(ds_factor, int(ds_limit))
+    if ds_mode == 'factor':
+        ds_factor = int(ds_value)
+    elif ds_mode == 'frequency':
+        ds_factor = int(fs / ds_value)
+    elif ds_mode == 'rate':
+        ds_factor = int(fs * ds_value)
+    else:
+        raise ValueError(
+            f"ds_mode must be 'factor', 'frequency', or 'rate', got {ds_mode!r}.")
 
     # ------------------------------------------------------------------
     # Step 2: package fine (original resolution) signals
@@ -108,7 +129,7 @@ def prepare_signals(u: np.ndarray,
     # ------------------------------------------------------------------
     # Step 3: downsample and package coarse signals
     # ------------------------------------------------------------------
-    if ds_factor == 1:
+    if ds_factor <= 1:
         coarse = fine
     else:
         u_ds = _safe_resample(u, ds_factor)
@@ -118,53 +139,6 @@ def prepare_signals(u: np.ndarray,
                                    ds_factor=ds_factor, T_h=T_h)
 
     return {'coarse': coarse, 'fine': fine}
-
-
-# ---------------------------------------------------------------------------
-# Bandwidth estimation
-# ---------------------------------------------------------------------------
-
-def _estimate_bandwidth(u: np.ndarray,
-                         fs: float,
-                         T_h: float,
-                         energy_threshold: float = 0.999) -> float:
-    """
-    Estimate the one-sided bandwidth of u that retains `energy_threshold`
-    fraction of the total signals energy.
-
-    The FFT is zero-padded to the next power of 2 above len(u) + n_h - 1,
-    where n_h = ceil(T_h * fs) + 1 is the impulse response length in samples.
-    This padding length matches the one used in the convolution so that the
-    spectral estimate is consistent with the inference problem.
-
-    Parameters
-    ----------
-    u                : np.ndarray  Input signals.
-    fs               : float       Sampling frequency [Hz].
-    T_h              : float       Impulse response duration [s].
-    energy_threshold : float       Fraction of energy to retain (default 0.999).
-
-    Returns
-    -------
-    f_cut : float   Cutoff frequency [Hz].
-    """
-    n     = len(u)
-    n_h   = int(np.ceil(T_h * fs)) + 1
-    Nfft  = int(2 ** np.ceil(np.log2(n + n_h - 1)))
-
-    # Single-sided spectrum
-    U     = np.fft.rfft(u, n=Nfft)
-    freqs = np.fft.rfftfreq(Nfft, d=1.0 / fs)
-
-    # Cumulative energy
-    psd      = np.abs(U) ** 2
-    psd_cum  = np.cumsum(psd)
-    psd_cum /= psd_cum[-1]                    # normalise to [0, 1]
-
-    idx = np.searchsorted(psd_cum, energy_threshold)
-    idx = min(idx, len(freqs) - 1)
-
-    return float(freqs[idx])
 
 
 # ---------------------------------------------------------------------------
@@ -257,12 +231,12 @@ def _package_signals(u: np.ndarray,
     t_h = np.arange(n_h) * dt                  # impulse response time vector [s]
 
     sig = {
-        'u'         : jnp.array(u,   dtype=jnp.float32),
-        'q'         : jnp.array(q,   dtype=jnp.float32),
+        'u'         : jnp.array(u,   dtype=jnp.float64),
+        'q'         : jnp.array(q,   dtype=jnp.float64),
         'fs'        : float(fs),
         'dt'        : float(dt),
-        't'         : jnp.array(t,   dtype=jnp.float32),
-        't_h'       : jnp.array(t_h, dtype=jnp.float32),
+        't'         : jnp.array(t,   dtype=jnp.float64),
+        't_h'       : jnp.array(t_h, dtype=jnp.float64),
         'n'         : int(n),
         'valid'     : int(valid_start),         # Python int -> static in JAX
         'ds_factor' : int(ds_factor),

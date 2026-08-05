@@ -35,7 +35,7 @@ from typing import Optional
 # Default prior hyperparameters  (Table / eqs. 30-32 in Yoko & Polifke 2026)
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class PriorConfig:
     """
     Hyperparameters defining the Gaussian prior in parameter space.
@@ -70,7 +70,7 @@ class PriorConfig:
     sig_beta : float = 0.5
     T_h      : Optional[float] = None
     LFL      : Optional[float] = None
-    LFL_sigma: float = 1e-3
+    LFL_sigma: float = 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +204,8 @@ def generate_prior(N: int,
     Cp = np.diag(sig_vec ** 2)                          # (3N, 3N)
 
     # --- Convert to JAX arrays ---
-    bp = jnp.array(bp, dtype=jnp.float32)
-    Cp = jnp.array(Cp, dtype=jnp.float32)
+    bp = jnp.array(bp, dtype=jnp.float64)
+    Cp = jnp.array(Cp, dtype=jnp.float64)
 
     # --- Parameter names ---
     names = []
