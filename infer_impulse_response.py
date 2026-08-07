@@ -22,14 +22,16 @@ Minimal usage example
     from infer_impulse_response import infer_impulse_response
     from core.prior import PriorConfig
     from inference.optimizer import OptimizerConfig
+    from utils.io import load_raw_incomp
     import numpy as np
-    import scipy.io as sio
 
-    # Load LES data
-    data = sio.loadmat('data/BRS_EderSilva23/data_raw_incomp.mat')
-    u = data['u'].ravel()
-    q = data['q'].ravel()
-    t = data['t'].ravel()
+    # Load experimental data. data_raw_incomp.mat stores a MATLAB iddata
+    # object rather than plain arrays; load_raw_incomp unpacks it and
+    # reproduces generateFigures.m's (x - mean(x))/mean(x) normalisation.
+    data = load_raw_incomp('data/BRS_EderSilva23/data_raw_incomp.mat')
+    u = data['u']
+    q = data['q']
+    t = data['t']
 
     # Physical parameters
     L_ref = 50e-3     # flame length [m]
