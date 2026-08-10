@@ -142,6 +142,70 @@ def prepare_signals(u: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
+# Differentiable variant (no downsampling)
+# ---------------------------------------------------------------------------
+
+def prepare_signals_diff(u: jnp.ndarray,
+                          q: jnp.ndarray,
+                          fs: float,
+                          T_h: float) -> dict:
+    """
+    JAX-differentiable signal preparation, restricted to ds_factor <= 1
+    (no downsampling).
+
+    prepare_signals routes u, q through np.asarray and, when downsampling
+    is requested, scipy.signal.resample_poly - neither of which accepts
+    JAX tracers, so gradients w.r.t. u, q cannot flow through it. This
+    variant keeps u, q as jnp arrays throughout and skips the
+    (SciPy-only) resampling path entirely, so it is only valid when the
+    caller does not downsample - i.e. it reproduces exactly the
+    ds_factor <= 1 branch of prepare_signals ('factor' mode with
+    ds_value <= 1, matching loadDefaultConfig.m's default). It exists
+    for use inside gradient-tracked code, e.g. inference.sensitivity's
+    implicit-differentiation MAP estimator, where the pipeline needs to
+    stay differentiable from raw u, q through to the fitted DTD
+    parameters.
+
+    Parameters
+    ----------
+    u   : jnp.ndarray, shape (M,)   Input fluctuation signal.
+    q   : jnp.ndarray, shape (M,)   Output fluctuation signal.
+    fs  : float                      Sampling frequency [Hz].
+    T_h : float                      Desired impulse response duration [s].
+
+    Returns
+    -------
+    signals : dict
+        Nested dict with keys 'coarse' and 'fine' (identical, since
+        ds_factor=1), matching the layout produced by prepare_signals.
+    """
+    u = jnp.asarray(u, dtype=jnp.float64).ravel()
+    q = jnp.asarray(q, dtype=jnp.float64).ravel()
+
+    if u.shape[0] != q.shape[0]:
+        raise ValueError(f"u and q must have the same length, "
+                         f"got {u.shape[0]} and {q.shape[0]}.")
+
+    n   = u.shape[0]
+    dt  = 1.0 / fs
+    n_h = int(np.ceil(T_h * fs)) + 1
+    valid_start = n_h - 1
+
+    sig = {
+        'u'         : u,
+        'q'         : q,
+        'fs'        : float(fs),
+        'dt'        : float(dt),
+        't'         : jnp.arange(n)   * dt,
+        't_h'       : jnp.arange(n_h) * dt,
+        'n'         : int(n),
+        'valid'     : int(valid_start),
+        'ds_factor' : 1,
+    }
+    return {'coarse': sig, 'fine': sig}
+
+
+# ---------------------------------------------------------------------------
 # Anti-aliased downsampling
 # ---------------------------------------------------------------------------
 

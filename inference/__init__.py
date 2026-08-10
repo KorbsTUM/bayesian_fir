@@ -35,3 +35,8 @@ from inference.mcmc import (
     run_mcmc_python,
     run_mcmc_from_posterior,
 )
+
+from inference.sensitivity import (
+    make_map_estimator,
+    sensitivity_to_physical,
+)
