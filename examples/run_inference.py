@@ -106,18 +106,18 @@ def build_optimizer_config(args) -> OptimizerConfig:
     return OptimizerConfig(use_parallel=not args.no_parallel)
 
 
-def run_baseline(u, q, t, model_orders, preproc_cfg, opt_cfg, T_c, ce0):
+def run_baseline(u, q, t, model_orders, preproc_cfg, opt_cfg, T_c, ce0, method):
     # infer_impulse_response prints its own progress/summary (InferenceConfig
     # defaults to verbose=True), so nothing further is printed here.
     print("\n=== Step 1: baseline inference (LFL free) ===")
-    config = InferenceConfig(preproc=preproc_cfg, optimizer=opt_cfg, Ce0=ce0)
+    config = InferenceConfig(preproc=preproc_cfg, optimizer=opt_cfg, Ce0=ce0, method=method)
     return infer_impulse_response(u, q, t, T_c, model_orders=model_orders, config=config)
 
 
-def run_lfl(u, q, t, model_orders, preproc_cfg, opt_cfg, T_c, ce0):
+def run_lfl(u, q, t, model_orders, preproc_cfg, opt_cfg, T_c, ce0, method):
     print("\n=== Step 2: inference with LFL = 1 ===")
     config = InferenceConfig(preproc=preproc_cfg, optimizer=opt_cfg,
-                              prior=PriorConfig(LFL=1.0), Ce0=ce0)
+                              prior=PriorConfig(LFL=1.0), Ce0=ce0, method=method)
     return infer_impulse_response(u, q, t, T_c, model_orders=model_orders, config=config)
 
 
@@ -159,7 +159,7 @@ def plot_ftf_comparison(result_baseline, result_lfl, exp_ftf, out_path):
     print(f"  saved {out_path}")
 
 
-def run_mcmc_validation(u, q, t, model_order, preproc_cfg, opt_cfg, T_c, ce0, out_path):
+def run_mcmc_validation(u, q, t, model_order, preproc_cfg, opt_cfg, T_c, ce0, method, out_path):
     print(f"\n=== Optional: MCMC validation (N={model_order}, matches Figures 10-11) ===")
     config = InferenceConfig(
         preproc  = preproc_cfg,
@@ -168,6 +168,7 @@ def run_mcmc_validation(u, q, t, model_order, preproc_cfg, opt_cfg, T_c, ce0, ou
         run_mcmc = True,
         mcmc_iter= 500_000,
         Ce0      = ce0,
+        method   = method,
     )
     result = infer_impulse_response(u, q, t, T_c, model_orders=[model_order], config=config)
     print(f"  MCMC acceptance rate: {result.mcmc.accept_rate:.1%}")
@@ -236,6 +237,12 @@ def main():
         "--no-parallel", action="store_true",
         help="Disable vmap-parallel restarts (Python for-loop instead); "
              "useful for debugging on CPU.")
+    parser.add_argument(
+        "--method", choices=["laplace", "vi"], default="laplace",
+        help="Inference backend (default: laplace). 'laplace' is the "
+             "MAP + Hessian approximation used throughout the paper. 'vi' "
+             "fits a normalizing flow via the ELBO, warm-started from the "
+             "same Laplace MAP - see inference/variational.py.")
     args = parser.parse_args()
 
     if args.noise_free and args.ce0 is None:
@@ -257,15 +264,17 @@ def main():
     else:
         print("No experimental FTF reference found - plotting inferred FTF only.")
 
-    result_baseline = run_baseline(u, q, t, args.model_orders, preproc_cfg, opt_cfg, T_c, args.ce0)
-    result_lfl      = run_lfl(u, q, t, args.model_orders, preproc_cfg, opt_cfg, T_c, args.ce0)
+    result_baseline = run_baseline(u, q, t, args.model_orders, preproc_cfg, opt_cfg, T_c,
+                                    args.ce0, args.method)
+    result_lfl      = run_lfl(u, q, t, args.model_orders, preproc_cfg, opt_cfg, T_c,
+                               args.ce0, args.method)
 
     plot_ftf_comparison(result_baseline, result_lfl, exp_ftf,
                          OUTPUT_DIR / "ftf_comparison.png")
 
     if args.mcmc:
         run_mcmc_validation(u, q, t, args.mcmc_order, preproc_cfg, opt_cfg, T_c, args.ce0,
-                             OUTPUT_DIR / "corner_mcmc.png")
+                             args.method, OUTPUT_DIR / "corner_mcmc.png")
 
     print("\nDone.")
 

@@ -74,6 +74,7 @@ from inference.posterior import (
     ModelRanking,
     estimate_posterior,
 )
+from inference.variational import VIConfig, estimate_posterior_vi
 from inference.mcmc import (
     MCMCResult,
     run_mcmc_from_posterior,
@@ -95,6 +96,13 @@ class InferenceConfig:
     prior    : PriorConfig       Prior hyperparameters.
     preproc  : PreprocConfig     Signal downsampling settings.
     optimizer: OptimizerConfig   LM optimizer settings.
+    method   : str               Inference backend: 'laplace' (default) or
+                                  'vi' (normalizing-flow variational
+                                  inference, warm-started from the Laplace
+                                  MAP - see inference.variational). Both
+                                  return the same PosteriorResult type.
+    vi       : VIConfig          Flow architecture / training settings,
+                                  used only when method='vi'.
     run_mcmc : bool              Whether to run MCMC for the best model.
     mcmc_iter: int               Number of MCMC iterations.
     mcmc_burn: float             MCMC burn-in fraction.
@@ -108,6 +116,8 @@ class InferenceConfig:
     prior     : PriorConfig      = field(default_factory=PriorConfig)
     preproc   : PreprocConfig    = field(default_factory=PreprocConfig)
     optimizer : OptimizerConfig  = field(default_factory=OptimizerConfig)
+    method    : str              = 'laplace'
+    vi        : VIConfig         = field(default_factory=VIConfig)
     run_mcmc  : bool             = False
     mcmc_iter : int              = 200_000
     mcmc_burn : float            = 0.25
@@ -155,6 +165,7 @@ class InferenceResult:
             "\n" + "="*60,
             "Bayesian Impulse Response Inference - Summary",
             "="*60,
+            f"Method           : {self.best.method}",
             f"Best model order : N = {self.best.N}",
             f"logML            : {self.best.logML:.2f}",
             f"logBFL           : {self.best.logBFL:.2f}",
@@ -260,6 +271,9 @@ def infer_impulse_response(u             : np.ndarray,
         raise ValueError(f"T_c must be positive, got {T_c}.")
     if len(model_orders) == 0:
         raise ValueError("model_orders must contain at least one entry.")
+    if config.method not in ('laplace', 'vi'):
+        raise ValueError(
+            f"config.method must be 'laplace' or 'vi', got {config.method!r}.")
 
     # Guard: fixed T_h + multiple model orders biases model ranking
     if prior_cfg.T_h is not None and len(model_orders) > 1:
@@ -327,20 +341,35 @@ def infer_impulse_response(u             : np.ndarray,
                   f"Valid samples = {Nd}")
 
         # --------------------------------------------------------------
-        # Estimate posterior
+        # Estimate posterior (Laplace or normalizing-flow VI)
         # --------------------------------------------------------------
-        result = estimate_posterior(
-            signals   = signals,
-            bp        = bp,
-            Cp        = Cp,
-            T_c       = T_c,
-            prior_cfg = prior_cfg,
-            opt_cfg   = opt_cfg,
-            N         = N,
-            names     = names,
-            Ce0       = config.Ce0,
-            n_eval_pts= config.n_eval_pts,
-        )
+        if config.method == 'vi':
+            result = estimate_posterior_vi(
+                signals   = signals,
+                bp        = bp,
+                Cp        = Cp,
+                T_c       = T_c,
+                prior_cfg = prior_cfg,
+                opt_cfg   = opt_cfg,
+                vi_cfg    = config.vi,
+                N         = N,
+                names     = names,
+                Ce0       = config.Ce0,
+                n_eval_pts= config.n_eval_pts,
+            )
+        else:
+            result = estimate_posterior(
+                signals   = signals,
+                bp        = bp,
+                Cp        = Cp,
+                T_c       = T_c,
+                prior_cfg = prior_cfg,
+                opt_cfg   = opt_cfg,
+                N         = N,
+                names     = names,
+                Ce0       = config.Ce0,
+                n_eval_pts= config.n_eval_pts,
+            )
 
         all_results.append(result)
         logML_list .append(result.logML)

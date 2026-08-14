@@ -40,3 +40,8 @@ from inference.sensitivity import (
     make_map_estimator,
     sensitivity_to_physical,
 )
+
+from inference.variational import (
+    VIConfig,
+    estimate_posterior_vi,
+)

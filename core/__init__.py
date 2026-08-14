@@ -31,6 +31,7 @@ from core.prior import (
 from core.cost import (
     calculate_cost,
     calculate_cost_varpro,
+    calculate_cost_val,
     fd_hessian,
 )
 

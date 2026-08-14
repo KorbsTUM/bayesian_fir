@@ -69,16 +69,27 @@ class PosteriorResult:
     Ca_map  : jnp.ndarray (3N,3N) Posterior covariance in physical space.
     Ce      : float                MAP noise variance estimate.
     h       : ImpulseResponse      Impulse response struct.
-    logML   : float                Log marginal likelihood.
+    logML   : float                Log marginal likelihood (Laplace) or
+                                    ELBO (normalizing-flow VI).
     logBFL  : float                Log best-fit likelihood.
-    logOF   : float                Log Occam factor.
+    logOF   : float                Log Occam factor (Laplace) or the same
+                                    logML - logBFL relation, repurposed
+                                    (not a literal Occam factor) for VI.
     N       : int                  Model order.
     names   : list of str          Parameter names.
+    posterior_samples : jnp.ndarray (3N, n_post) or None
+                                    Raw posterior samples, populated by the
+                                    normalizing-flow VI backend
+                                    (inference.variational) for corner-plot
+                                    overlay; None for Laplace results.
+    method  : str                  'laplace' (default) or 'vi' - which
+                                    backend produced this result.
     """
 
     def __init__(self,
                  b_map, Cb_map, a_map, Ca_map,
-                 Ce, h, logML, logBFL, logOF, N, names):
+                 Ce, h, logML, logBFL, logOF, N, names,
+                 posterior_samples=None, method='laplace'):
         self.b_map  = b_map
         self.Cb_map = Cb_map
         self.a_map  = a_map
@@ -90,6 +101,8 @@ class PosteriorResult:
         self.logOF  = float(logOF)
         self.N      = N
         self.names  = names
+        self.posterior_samples = posterior_samples
+        self.method = method
 
     def __repr__(self):
         return (

@@ -58,7 +58,7 @@ from jax import jit
 from functools import partial
 from typing import Optional
 
-from core.impulse_response import calculate_impulse_response
+from core.impulse_response import calculate_impulse_response, impulse_response_val
 from core.prior import PriorConfig
 
 
@@ -266,6 +266,94 @@ def _calculate_cost_core(u: jnp.ndarray,
     Ce_ME = _mackay_noise_estimate(r, d2J, inv_Cp_diag, Nd, Nb)
 
     return J, dJ, d2J, Ce_ME, J_like, p
+
+
+# ---------------------------------------------------------------------------
+# Value-only cost:  J(b), no derivatives
+# ---------------------------------------------------------------------------
+
+def calculate_cost_val(signals: dict,
+                        Ce: float,
+                        b: jnp.ndarray,
+                        bp: jnp.ndarray,
+                        Cp: jnp.ndarray,
+                        T_c: float,
+                        prior_cfg: PriorConfig,
+                        data_level: str = 'coarse') -> jnp.ndarray:
+    """
+    Evaluate the negative log-posterior J(b) only - no manually-computed
+    gradient/Hessian/MML noise estimate.
+
+    Built on impulse_response_val (forward pass only, no analytic
+    Jacobian) rather than calculate_impulse_response, since callers that
+    only need the scalar J and differentiate it via jax.grad/jax.vjp
+    (e.g. inference.variational's ELBO training loop, which backprops
+    through flow parameters -> b -> J) get that Jacobian for free through
+    ordinary autodiff and never touch calculate_cost's manually-returned
+    dJ/d2J. Skipping their computation is cheaper per Monte Carlo sample
+    in a training loop that evaluates J thousands of times.
+
+    Parameters
+    ----------
+    signals    : dict     Output of prepare_signals. Uses signals[data_level].
+    Ce         : float    Data noise variance.
+    b          : jnp.ndarray, shape (3N,)   Full parameter vector.
+    bp         : jnp.ndarray, shape (3N,)   Prior mean.
+    Cp         : jnp.ndarray, shape (3N,3N) Prior covariance (diagonal).
+    T_c        : float    Convective timescale [s].
+    prior_cfg  : PriorConfig   Prior configuration (static).
+    data_level : str      'coarse' or 'fine'. Default 'coarse'.
+
+    Returns
+    -------
+    J : jnp.ndarray, scalar   Total negative log-posterior.
+    """
+    sig    = signals[data_level]
+    u      = sig['u']
+    q_v    = sig['q'][sig['valid']:]
+    t_h_nd = sig['t_h'] / T_c
+    dt     = sig['dt']
+
+    return _calculate_cost_val_core(u, q_v, t_h_nd, dt, Ce, b, bp, Cp, T_c, prior_cfg)
+
+
+@partial(jit, static_argnums=(9,))
+def _calculate_cost_val_core(u: jnp.ndarray,
+                              q_v: jnp.ndarray,
+                              t_h_nd: jnp.ndarray,
+                              dt: float,
+                              Ce: float,
+                              b: jnp.ndarray,
+                              bp: jnp.ndarray,
+                              Cp: jnp.ndarray,
+                              T_c: float,
+                              prior_cfg: PriorConfig) -> jnp.ndarray:
+    """Jitted core of calculate_cost_val. See calculate_cost_val for parameter docs."""
+    Nd = q_v.shape[0]
+
+    Cp_diag     = jnp.diag(Cp)
+    inv_Cp_diag = 1.0 / Cp_diag
+
+    diff    = b - bp
+    J_prior = 0.5 * jnp.dot(diff, inv_Cp_diag * diff)
+    J_prior = J_prior + 0.5 * jnp.sum(jnp.log(2.0 * jnp.pi * Cp_diag))
+
+    J_LFL = jnp.zeros(())
+    if prior_cfg.LFL is not None:
+        n_idx  = jnp.arange(b.shape[0] // 3) * 3
+        n_vals = b[n_idx]
+        err    = jnp.sum(n_vals) - prior_cfg.LFL
+        s2     = prior_cfg.LFL_sigma ** 2
+        J_LFL  = 0.5 * err ** 2 / s2 + 0.5 * jnp.log(2.0 * jnp.pi * s2)
+
+    h = impulse_response_val(b, t_h_nd, T_c)
+    p = _valid_convolution(u, h, dt)
+    r = p - q_v
+
+    J_like = 0.5 * jnp.dot(r, r) / Ce
+    J_like = J_like + 0.5 * Nd * jnp.log(2.0 * jnp.pi * Ce)
+
+    return J_prior + J_LFL + J_like
 
 
 # ---------------------------------------------------------------------------
