@@ -71,24 +71,34 @@ def load_kornilov_case(subset     : str,
     return {'u': u, 'q': q, 't': t, 'dt': dt, 'fs': 1.0 / dt}
 
 
-def load_all_kornilov_datasets(data_dir  : Optional[Path] = None,
-                                normalise : bool = True) -> List[DatasetSpec]:
+def load_all_kornilov_datasets(data_dir   : Optional[Path] = None,
+                                normalise  : bool = True,
+                                subsets    : Optional[List[str]] = None,
+                                wgr_labels : Optional[List[str]] = None
+                                ) -> List[DatasetSpec]:
     """
-    Load all 20 WET Kornilov cases as inference.pooled.DatasetSpec objects,
-    with T_c = L_ref / U_ref from metadata.KORNILOV_CASES.
+    Load WET Kornilov cases as inference.pooled.DatasetSpec objects, with
+    T_c = L_ref / U_ref from metadata.KORNILOV_CASES.
 
     Parameters
     ----------
-    data_dir  : Path, optional   See load_kornilov_case.
-    normalise : bool             See load_kornilov_case.
+    data_dir   : Path, optional        See load_kornilov_case.
+    normalise  : bool                  See load_kornilov_case.
+    subsets    : list of str, optional Restrict to these series (subset of
+                                       metadata.SUBSETS). Default: all 5.
+    wgr_labels : list of str, optional Restrict to these WGR cases (subset
+                                       of metadata.WGR_LABELS). Default: all 4.
 
     Returns
     -------
-    datasets : list of DatasetSpec, one per (subset, WGR) case.
+    datasets : list of DatasetSpec, one per (subset, WGR) case (20 by default).
     """
+    subsets    = SUBSETS     if subsets    is None else subsets
+    wgr_labels = WGR_LABELS  if wgr_labels is None else wgr_labels
+
     datasets = []
-    for subset in SUBSETS:
-        for wgr in WGR_LABELS:
+    for subset in subsets:
+        for wgr in wgr_labels:
             sig = load_kornilov_case(subset, wgr, data_dir=data_dir, normalise=normalise)
             meta = KORNILOV_CASES[subset][wgr]
             T_c = meta['L_ref'] / meta['U_ref']
