@@ -45,3 +45,11 @@ from inference.variational import (
     VIConfig,
     estimate_posterior_vi,
 )
+
+from inference.pooled import (
+    DatasetSpec,
+    PooledInferenceConfig,
+    PooledModelRanking,
+    PooledInferenceResult,
+    infer_shared_model_order,
+)
