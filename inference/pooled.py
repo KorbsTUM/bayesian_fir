@@ -60,17 +60,29 @@ removing per-dataset progress printing - real rework of already-validated
 core files, deliberately deferred rather than built here.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, TYPE_CHECKING
 
 import numpy as np
 import jax.numpy as jnp
 
 from core.prior import PriorConfig
-from config.defaults import PreprocConfig
 from inference.optimizer import OptimizerConfig
 from inference.variational import VIConfig
-from infer_impulse_response import InferenceConfig, InferenceResult, infer_impulse_response
+
+if TYPE_CHECKING:
+    # config.defaults imports inference.optimizer, and infer_impulse_response
+    # imports config.defaults, so importing either back here at module load
+    # time would create a config/infer_impulse_response <-> inference import
+    # cycle (it only manifests depending on which module a caller happens to
+    # import first, since inference/pooled.py is the first thing inside the
+    # inference package to reach outside it). Both are instead imported
+    # lazily at call time, once every package involved is already fully
+    # loaded - see _dataset_inference_config and infer_shared_model_order.
+    from config.defaults import PreprocConfig
+    from infer_impulse_response import InferenceConfig, InferenceResult
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +134,10 @@ class PooledInferenceConfig:
     prior             : PriorConfig       Shared across all datasets (see
                                           module docstring for why this is
                                           the physically correct default).
-    preproc           : PreprocConfig     Shared downsampling settings.
+    preproc           : PreprocConfig or None   Shared downsampling settings.
+                                          None -> PreprocConfig() (no
+                                          downsampling), resolved lazily by
+                                          infer_shared_model_order.
     ranking_method    : str               'laplace' (default) or 'vi', used
                                           for the stage-1 sweep.
     ranking_optimizer : OptimizerConfig   Used for stage 1.
@@ -141,7 +156,7 @@ class PooledInferenceConfig:
                                           module docstring's "Output volume".
     """
     prior             : PriorConfig             = field(default_factory=PriorConfig)
-    preproc           : PreprocConfig           = field(default_factory=PreprocConfig)
+    preproc           : Optional[PreprocConfig] = None   # None -> PreprocConfig(), resolved lazily
     ranking_method    : str                     = 'laplace'
     ranking_optimizer : OptimizerConfig         = field(default_factory=OptimizerConfig)
     ranking_vi        : VIConfig                = field(default_factory=VIConfig)
@@ -258,6 +273,7 @@ def _dataset_inference_config(spec       : DatasetSpec,
                                pool_ce0   : Optional[float],
                                n_eval_pts : int) -> InferenceConfig:
     """Build one dataset's InferenceConfig, applying its noise overrides."""
+    from infer_impulse_response import InferenceConfig   # see import note at top of file
     if spec.infer_noise is not None:
         opt_cfg = opt_cfg._replace(infer_noise=spec.infer_noise)
     ce0 = spec.Ce0 if spec.Ce0 is not None else pool_ce0
@@ -296,12 +312,19 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
     -------
     result : PooledInferenceResult
     """
+    from infer_impulse_response import infer_impulse_response   # see import note at top of file
+
     if len(datasets) == 0:
         raise ValueError("datasets must contain at least one entry.")
     if len(model_orders) == 0:
         raise ValueError("model_orders must contain at least one entry.")
     if config is None:
         config = PooledInferenceConfig()
+
+    preproc_cfg = config.preproc
+    if preproc_cfg is None:
+        from config.defaults import PreprocConfig
+        preproc_cfg = PreprocConfig()
 
     param_method = config.param_method    or config.ranking_method
     param_opt    = config.param_optimizer or config.ranking_optimizer
@@ -317,7 +340,7 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
     ranking_results = []
     for spec in datasets:
         cfg = _dataset_inference_config(
-            spec, config.prior, config.preproc,
+            spec, config.prior, preproc_cfg,
             config.ranking_method, config.ranking_optimizer, config.ranking_vi,
             config.Ce0, config.n_eval_pts)
         result = infer_impulse_response(
@@ -344,7 +367,7 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
     param_results = []
     for spec in datasets:
         cfg = _dataset_inference_config(
-            spec, config.prior, config.preproc,
+            spec, config.prior, preproc_cfg,
             param_method, param_opt, param_vi,
             config.Ce0, config.n_eval_pts)
         result = infer_impulse_response(
