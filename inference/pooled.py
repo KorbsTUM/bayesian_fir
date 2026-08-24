@@ -152,6 +152,17 @@ class PooledInferenceConfig:
                                           DatasetSpec.Ce0 when set.
     n_eval_pts        : int               Impulse-response evaluation points,
                                           forwarded to infer_impulse_response.
+    run_mcmc          : bool              Whether to run MCMC validation in
+                                          stage 2 (once per dataset, at the
+                                          shared N_star). Never runs during
+                                          the stage-1 ranking sweep. Default
+                                          False.
+    mcmc_iter         : int               Forwarded to InferenceConfig when
+                                          run_mcmc=True (same defaults).
+    mcmc_burn         : float             "
+    mcmc_thin         : int               "
+    mcmc_seed         : int               "
+    mcmc_scan         : bool              "
     verbose           : bool              Pooled-level output only - see
                                           module docstring's "Output volume".
     """
@@ -165,6 +176,12 @@ class PooledInferenceConfig:
     param_vi          : Optional[VIConfig]        = None
     Ce0               : Optional[float]         = None
     n_eval_pts        : int                     = 500
+    run_mcmc          : bool                    = False
+    mcmc_iter         : int                     = 200_000
+    mcmc_burn         : float                   = 0.25
+    mcmc_thin         : int                     = 1
+    mcmc_seed         : int                     = 0
+    mcmc_scan         : bool                    = True
     verbose           : bool                    = True
 
 
@@ -271,8 +288,20 @@ def _dataset_inference_config(spec       : DatasetSpec,
                                opt_cfg    : OptimizerConfig,
                                vi_cfg     : VIConfig,
                                pool_ce0   : Optional[float],
-                               n_eval_pts : int) -> InferenceConfig:
-    """Build one dataset's InferenceConfig, applying its noise overrides."""
+                               n_eval_pts : int,
+                               run_mcmc   : bool = False,
+                               mcmc_iter  : int = 200_000,
+                               mcmc_burn  : float = 0.25,
+                               mcmc_thin  : int = 1,
+                               mcmc_seed  : int = 0,
+                               mcmc_scan  : bool = True) -> InferenceConfig:
+    """Build one dataset's InferenceConfig, applying its noise overrides.
+
+    MCMC args default to off/InferenceConfig's own defaults; only the
+    stage-2 call site in infer_shared_model_order passes non-default
+    values (see module docstring: MCMC never runs during the stage-1
+    ranking sweep).
+    """
     from infer_impulse_response import InferenceConfig   # see import note at top of file
     if spec.infer_noise is not None:
         opt_cfg = opt_cfg._replace(infer_noise=spec.infer_noise)
@@ -285,6 +314,12 @@ def _dataset_inference_config(spec       : DatasetSpec,
         vi         = vi_cfg,
         Ce0        = ce0,
         n_eval_pts = n_eval_pts,
+        run_mcmc   = run_mcmc,
+        mcmc_iter  = mcmc_iter,
+        mcmc_burn  = mcmc_burn,
+        mcmc_thin  = mcmc_thin,
+        mcmc_seed  = mcmc_seed,
+        mcmc_scan  = mcmc_scan,
         verbose    = False,   # see module docstring's "Output volume"
     )
 
@@ -369,14 +404,23 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
         cfg = _dataset_inference_config(
             spec, config.prior, preproc_cfg,
             param_method, param_opt, param_vi,
-            config.Ce0, config.n_eval_pts)
+            config.Ce0, config.n_eval_pts,
+            run_mcmc  = config.run_mcmc,
+            mcmc_iter = config.mcmc_iter,
+            mcmc_burn = config.mcmc_burn,
+            mcmc_thin = config.mcmc_thin,
+            mcmc_seed = config.mcmc_seed,
+            mcmc_scan = config.mcmc_scan)
         result = infer_impulse_response(
             spec.u, spec.q, spec.t, spec.T_c,
             model_orders=[N_star], config=cfg)
         param_results.append(result)
         if config.verbose:
             a = np.asarray(result.best.a_map)
-            print(f"  [{spec.name}] Ce={result.best.Ce:.3e}  n_1={a[0]:+.3f}")
+            mcmc_note = ""
+            if result.mcmc is not None:
+                mcmc_note = f"  MCMC accept={result.mcmc.accept_rate:.1%}"
+            print(f"  [{spec.name}] Ce={result.best.Ce:.3e}  n_1={a[0]:+.3f}{mcmc_note}")
 
     return PooledInferenceResult(
         N_star          = N_star,

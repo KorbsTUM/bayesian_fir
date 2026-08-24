@@ -77,7 +77,13 @@ def plot_pooled_ftf(result, out_path):
     omega = jnp.linspace(0.0, 2 * jnp.pi * 500, 200)
     freq = omega / (2 * jnp.pi)
 
-    subset_colour = {s: get_colours(i + 1) for i, s in enumerate(SUBSETS)}
+    # get_colours' palette has only 4 real colours - index 5 is white
+    # (a gradient blend-target, not a usable series colour; see
+    # utils/plotting.py's _PALETTE comment). With 5 subsets, index 1..4
+    # covers 4 of them and the 5th gets an explicit non-white colour
+    # rather than silently plotting white-on-white.
+    subset_colours_list = list(get_colours([1, 2, 3, 4])) + [np.array([0.2, 0.2, 0.2])]
+    subset_colour = dict(zip(SUBSETS, subset_colours_list))
     wgr_alpha     = {w: a for w, a in zip(WGR_LABELS, [0.35, 0.55, 0.75, 1.0])}
 
     fig, (ax_gain, ax_phase) = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
