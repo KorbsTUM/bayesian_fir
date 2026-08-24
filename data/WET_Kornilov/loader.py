@@ -10,6 +10,14 @@ metadata.py for the dataset structure and L_ref/U_ref provenance).
     load_all_kornilov_datasets(...) all 20 cases, ready to hand to
                                      inference.pooled.infer_shared_model_order
                                      as a list of DatasetSpec.
+    load_kornilov_fir_sysid(...)    one case's reference SysID impulse
+                                     response (fir_sysid.csv), for
+                                     comparison against the Bayesian DTD
+                                     fit - not an inference input, so kept
+                                     separate from DatasetSpec/the loaders
+                                     above (mirrors how utils.io keeps
+                                     load_ftf_experiment separate from
+                                     load_raw_incomp).
 """
 
 from pathlib import Path
@@ -110,3 +118,42 @@ def load_all_kornilov_datasets(data_dir   : Optional[Path] = None,
                 T_c  = T_c,
             ))
     return datasets
+
+
+def load_kornilov_fir_sysid(subset   : str,
+                             wgr      : str,
+                             data_dir : Optional[Path] = None) -> dict:
+    """
+    Load one WET Kornilov case's reference SysID impulse response
+    (fir_sysid.csv: time_s, value - dt=1e-4 s, 200 taps), for comparison
+    against the Bayesian DTD fit at the same case.
+
+    Curated from the external .../NieblYoko26/FIR_{prefix}_const.txt files
+    (prefix in {U, P, Lf, Tad, df}), which each hold all 4 WGR cases'
+    coefficients as 4 rows in a scrambled order - row 0 is WGR091, row 1
+    WGR166, row 2 WGR231, row 3 WGR0 - reordered here to match
+    metadata.WGR_LABELS. Reordering verified by reconstructing h(t) from
+    that file's own {prefix}_n/tau/sigma DTD-parameter arrays (already in
+    the correct WGR order, since those are built from the same-order
+    L_ref/U_ref arrays) and confirming >0.99 correlation against each
+    reordered row.
+
+    Parameters
+    ----------
+    subset   : str    One of data.WET_Kornilov.metadata.SUBSETS.
+    wgr      : str    One of data.WET_Kornilov.metadata.WGR_LABELS.
+    data_dir : Path, optional   Root containing '{subset}/{wgr}/'.
+                       Defaults to this package's own directory.
+
+    Returns
+    -------
+    fir : dict with keys
+        'time' : np.ndarray, (200,)   Lag time [s], dt=1e-4 s.
+        'val'  : np.ndarray, (200,)   SysID impulse response.
+    """
+    if data_dir is None:
+        data_dir = DEFAULT_DATA_DIR
+    case_dir = Path(data_dir) / subset / wgr
+
+    fir = np.loadtxt(case_dir / "fir_sysid.csv", delimiter=",")
+    return {'time': fir[:, 0], 'val': fir[:, 1]}
