@@ -199,8 +199,8 @@ def main():
         "--wgr", nargs="+", choices=WGR_LABELS, default=None,
         help="Restrict to these water-gas-ratio cases (default: all 4).")
     parser.add_argument(
-        "--model-orders", type=int, nargs="+", default=[1, 2, 3],
-        help="Candidate model orders for the stage-1 ranking sweep (default: 1 2 3).")
+        "--model-orders", type=int, nargs="+", default=[1, 2, 3, 4, 5],
+        help="Candidate model orders for the stage-1 ranking sweep (default: 1 2 3 4 5).")
     parser.add_argument(
         "--method", choices=["laplace", "vi"], default="laplace",
         help="Backend used for BOTH stages (default: laplace). Unlike "

@@ -203,7 +203,23 @@ class PooledModelRanking:
                                               Per-dataset, per-order logML
                                               (or ELBO, if ranking_method='vi').
     logML_total   : jnp.ndarray (n_orders,)   Summed across datasets.
-    best_N        : int                       Order maximizing logML_total.
+    best_N        : int                       Order maximizing logML_total,
+                                              among orders with a finite
+                                              total (see below).
+
+    A NaN logML for some (dataset, order) pair means that dataset's Laplace
+    covariance was numerically degenerate at that order (e.g. an
+    ill-conditioned Hessian - most often an overparameterized order
+    chasing structure that dataset's data doesn't support), not that the
+    order is literally the best fit. Since summing propagates NaN, one
+    bad (dataset, order) pair would otherwise poison that order's entire
+    pooled total, and - because plain jnp.argmax/jnp.max are not NaN-safe -
+    could even get that order silently crowned "best", or make a single
+    NaN cell corrupt an entire displayed row. Orders with a NaN pooled
+    total are excluded from best_N selection (with a printed warning) and
+    still shown as NaN in print_table() (that order's contribution really
+    is unavailable) rather than silently hidden or spread to unrelated
+    orders.
     """
 
     def __init__(self, orders, dataset_names, logML_matrix):
@@ -211,8 +227,28 @@ class PooledModelRanking:
         self.dataset_names = list(dataset_names)
         self.logML_matrix  = jnp.asarray(logML_matrix)
         self.logML_total   = jnp.sum(self.logML_matrix, axis=0)
-        best_idx           = int(jnp.argmax(self.logML_total))
-        self.best_N        = self.orders[best_idx]
+
+        total_nan_mask = jnp.isnan(self.logML_total)
+        if bool(jnp.all(total_nan_mask)):
+            raise ValueError(
+                "Pooled logML is NaN for every candidate model order - "
+                "cannot select a shared N. Check the optimizer/prior "
+                "settings (a fixed, very small Ce0 combined with an "
+                "overparameterized order is a common cause).")
+
+        cell_nan_mask = jnp.isnan(self.logML_matrix)
+        if bool(jnp.any(cell_nan_mask)):
+            rows, cols = np.nonzero(np.asarray(cell_nan_mask))
+            bad = sorted({(self.dataset_names[r], self.orders[c]) for r, c in zip(rows, cols)})
+            print(f"  WARNING: logML is NaN for {len(bad)} (dataset, order) "
+                  f"pair(s) {bad} - Laplace covariance was numerically "
+                  f"degenerate there (likely overparameterized for that "
+                  f"dataset). Any order with at least one NaN dataset is "
+                  f"excluded from shared-N selection.")
+
+        safe_total   = jnp.where(total_nan_mask, -jnp.inf, self.logML_total)
+        best_idx     = int(jnp.argmax(safe_total))
+        self.best_N  = self.orders[best_idx]
 
     def print_table(self):
         """
@@ -231,11 +267,14 @@ class PooledModelRanking:
         print(rule)
         for i, name in enumerate(self.dataset_names):
             row   = self.logML_matrix[i]
-            row_n = row - jnp.max(row)
+            # nanmax is safe here: __init__ already rejects any dataset
+            # whose row is entirely NaN (that would force logML_total to
+            # be all-NaN too, via summation, and raise there).
+            row_n = row - jnp.nanmax(row)
             vals  = "  ".join(f"{float(v):>{col_w}.2f}" for v in row_n)
             print(f"{name:>20}  {vals}")
         print(rule)
-        total_n = self.logML_total - jnp.max(self.logML_total)
+        total_n = self.logML_total - jnp.nanmax(self.logML_total)
         vals    = "  ".join(f"{float(v):>{col_w}.2f}" for v in total_n)
         print(f"{'TOTAL (pooled)':>20}  {vals}")
         print(rule)

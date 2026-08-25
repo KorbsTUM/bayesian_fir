@@ -140,7 +140,18 @@ class ModelRanking:
     logML   : jnp.ndarray (K,)    Log marginal likelihoods.
     logBFL  : jnp.ndarray (K,)    Log best-fit likelihoods.
     logOF   : jnp.ndarray (K,)    Log Occam factors.
-    best_N  : int                  Model order with highest logML.
+    best_N  : int                  Model order with highest logML, among
+                                   orders with a finite logML (see below).
+
+    A NaN logML for some order means the Laplace covariance was
+    numerically degenerate there (e.g. an ill-conditioned Hessian - most
+    often an overparameterized order chasing structure the data doesn't
+    support), not that the order is literally the best fit: plain
+    jnp.argmax/jnp.max are not NaN-safe and would otherwise either crown
+    a NaN order "best" or let a single NaN poison every other order's
+    displayed value. Such orders are excluded from best_N selection (with
+    a printed warning) and shown as NaN in print_table() rather than
+    silently hidden.
     """
 
     def __init__(self, orders, logML, logBFL, logOF):
@@ -148,12 +159,28 @@ class ModelRanking:
         self.logML   = jnp.array(logML)
         self.logBFL  = jnp.array(logBFL)
         self.logOF   = jnp.array(logOF)
-        best_idx     = int(jnp.argmax(self.logML))
+
+        nan_mask = jnp.isnan(self.logML)
+        if bool(jnp.all(nan_mask)):
+            raise ValueError(
+                "logML is NaN for every candidate model order - cannot "
+                "select a best model. Check the optimizer/prior settings "
+                "(a fixed, very small Ce0 combined with an overparameterized "
+                "order is a common cause).")
+        if bool(jnp.any(nan_mask)):
+            nan_orders = [N for N, is_nan in zip(self.orders, nan_mask) if is_nan]
+            print(f"  WARNING: logML is NaN for model order(s) {nan_orders} "
+                  f"- Laplace covariance was numerically degenerate there "
+                  f"(likely overparameterized for this data). Excluded from "
+                  f"best-N selection.")
+
+        safe_logML   = jnp.where(nan_mask, -jnp.inf, self.logML)
+        best_idx     = int(jnp.argmax(safe_logML))
         self.best_N  = self.orders[best_idx]
 
     def normalized(self):
         """Return logML and logBFL normalized to the best model."""
-        ml_max  = jnp.max(self.logML)
+        ml_max  = jnp.nanmax(self.logML)   # safe: __init__ already rejects all-NaN
         return (self.logML  - ml_max,
                 self.logBFL - ml_max,
                 self.logOF)
