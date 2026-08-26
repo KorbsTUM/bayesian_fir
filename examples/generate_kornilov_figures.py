@@ -207,8 +207,8 @@ def main():
              "run_pooled_inference.py's independent ranking/param method "
              "choice, this script applies one uniform choice everywhere.")
     parser.add_argument(
-        "--ce0", type=float, default=1e-6,
-        help="Fixed noise variance (default: 1e-6). All 20 cases are "
+        "--ce0", type=float, default=1e-5,
+        help="Fixed noise variance (default: 1e-5). All 20 cases are "
              "treated as noise-free here - infer_noise=False is hardcoded "
              "in this script, not a flag; only the fixed value is "
              "configurable.")

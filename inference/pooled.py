@@ -66,6 +66,7 @@ from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional, TYPE_CHECKING
 
 import numpy as np
+import jax
 import jax.numpy as jnp
 
 from core.prior import PriorConfig
@@ -423,6 +424,17 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
         ranking_results.append(result)
         if config.verbose:
             print(f"  [{spec.name}] best N={result.ranking.best_N}")
+        # inference.optimizer's LM step is rebuilt as a fresh jit closure on
+        # every call (see its module docstring / _make_lm_step), so JAX's
+        # compilation cache never gets reused across datasets anyway -
+        # confirmed empirically (identical-shape calls each independently
+        # pay the full ~250ms+ while_loop compile, zero cache hits). Given
+        # that reuse is already unavailable, clearing here costs little and
+        # keeps compiled-artifact memory from growing unbounded across a
+        # long sweep (root cause of the Ubuntu "cannot allocate memory"
+        # LLVM failures after a few cases) - a stopgap until the optimizer
+        # itself is restructured to make that reuse possible.
+        jax.clear_caches()
 
     logML_matrix   = jnp.stack([r.ranking.logML for r in ranking_results])
     pooled_ranking = PooledModelRanking(model_orders, [s.name for s in datasets], logML_matrix)
@@ -460,6 +472,7 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
             if result.mcmc is not None:
                 mcmc_note = f"  MCMC accept={result.mcmc.accept_rate:.1%}"
             print(f"  [{spec.name}] Ce={result.best.Ce:.3e}  n_1={a[0]:+.3f}{mcmc_note}")
+        jax.clear_caches()   # see stage 1's comment above
 
     return PooledInferenceResult(
         N_star          = N_star,
