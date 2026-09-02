@@ -26,9 +26,11 @@ By default this loads data/BRS_EderSilva23/, the turbulent dataset shipped
 with the repo, and treats it as noisy (the optimizer estimates the noise
 level from the data itself). To try a different dataset - e.g. laminar
 data that is effectively noise-free - point --data-dir at a directory
-containing a data_raw_incomp.mat file in the same MATLAB iddata format
-(InputData/OutputData/Ts fields; see utils.io.load_raw_incomp), and pass
---noise-free. An experimental FTF reference file is optional: if
+containing either a data_raw_incomp.mat file in the same MATLAB iddata
+format (InputData/OutputData/Ts fields; see utils.io.load_raw_incomp) or
+plain u.npy/q.npy arrays (see utils.io.load_raw_npy; pass --dt since the
+arrays don't carry their own timebase), and pass --noise-free.
+An experimental FTF reference file is optional: if
 --ftf-path isn't given or doesn't exist, the comparison plot just shows
 the inferred FTF without an experimental overlay. Downsampling and the
 convective timescale T_c = L_ref / U_ref are also very sampling-rate- and
@@ -71,7 +73,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from utils.io import load_raw_incomp, load_ftf_experiment
+from utils.io import load_raw_incomp, load_raw_npy, load_ftf_experiment
 from utils.plotting import errorpatch, get_colours, corner_heatmap
 from core.prior import PriorConfig
 from core.ftf import calculate_ftf
@@ -91,10 +93,14 @@ L_REF = 50e-3    # flame length [m]
 U_REF = 11.3     # bulk flow velocity [m/s]
 
 
-def load_data(data_dir: Path):
-    path = data_dir / "data_raw_incomp.mat"
-    print(f"Loading data from {path}")
-    data = load_raw_incomp(path)
+def load_data(data_dir: Path, dt: float = None):
+    mat_path = data_dir / "data_raw_incomp.mat"
+    if mat_path.exists():
+        print(f"Loading data from {mat_path}")
+        data = load_raw_incomp(mat_path)
+    else:
+        print(f"Loading data from {data_dir} (u.npy/q.npy, dt={dt})")
+        data = load_raw_npy(data_dir, dt=dt)
     print(f"  {data['u'].shape[0]} samples at {data['fs']:.1f} Hz "
           f"({data['t'][-1] * 1e3:.1f} ms)")
     return data
@@ -198,7 +204,14 @@ def main():
         help="Model order for the MCMC validation pass (default: 3).")
     parser.add_argument(
         "--data-dir", type=Path, default=DEFAULT_DATA_DIR,
-        help=f"Directory containing data_raw_incomp.mat (default: {DEFAULT_DATA_DIR}).")
+        help=f"Directory containing either data_raw_incomp.mat (MATLAB "
+             f"iddata format) or u.npy/q.npy (plain arrays; requires --dt) "
+             f"(default: {DEFAULT_DATA_DIR}).")
+    parser.add_argument(
+        "--dt", type=float, default=None,
+        help="Sampling interval [s], required when --data-dir contains "
+             "u.npy/q.npy instead of data_raw_incomp.mat (the plain arrays "
+             "don't carry their own timebase).")
     parser.add_argument(
         "--ftf-path", type=Path, default=None,
         help="Optional experimental FTF .mat file for the comparison plot "
@@ -247,12 +260,15 @@ def main():
 
     if args.noise_free and args.ce0 is None:
         parser.error("--noise-free requires --ce0 (a fixed noise variance).")
+    if not (args.data_dir / "data_raw_incomp.mat").exists() and args.dt is None:
+        parser.error("--dt is required when --data-dir contains u.npy/q.npy "
+                      "instead of data_raw_incomp.mat.")
 
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = build_optimizer_config(args)
     T_c         = args.l_ref / args.u_ref
 
-    data = load_data(args.data_dir)
+    data = load_data(args.data_dir, dt=args.dt)
     u, q, t = data['u'], data['q'], data['t']
 
     ftf_path = args.ftf_path

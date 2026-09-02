@@ -68,6 +68,39 @@ def load_raw_incomp(path, normalise: bool = True) -> dict:
     return {'u': u, 'q': q, 't': t, 'dt': dt, 'fs': 1.0 / dt}
 
 
+def load_raw_npy(data_dir, dt: float, normalise: bool = True) -> dict:
+    """
+    Load a raw input/output dataset stored as plain u.npy / q.npy arrays
+    (e.g. locally-supplied CFD run data, as opposed to the MATLAB iddata
+    .mat format handled by load_raw_incomp). Applies the same
+    (x - mean(x)) / mean(x) normalisation so both loaders feed
+    infer_impulse_response identically.
+
+    Parameters
+    ----------
+    data_dir  : str or Path   Directory containing u.npy and q.npy.
+    dt        : float          Sampling interval [s] (constant, since the
+                               arrays don't carry their own timebase).
+    normalise : bool          Apply the relative-fluctuation normalisation.
+                               Default True.
+
+    Returns
+    -------
+    data : dict with keys 'u', 'q', 't', 'dt', 'fs' (see load_raw_incomp).
+    """
+    data_dir = Path(data_dir)
+    u = np.load(data_dir / "u.npy").ravel().astype(np.float64)
+    q = np.load(data_dir / "q.npy").ravel().astype(np.float64)
+
+    if normalise:
+        u = (u - u.mean()) / u.mean()
+        q = (q - q.mean()) / q.mean()
+
+    t = np.arange(u.shape[0]) * dt
+
+    return {'u': u, 'q': q, 't': t, 'dt': dt, 'fs': 1.0 / dt}
+
+
 def load_ftf_experiment(path) -> dict:
     """
     Load the experimental flame transfer function reference data.
