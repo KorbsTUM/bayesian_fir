@@ -405,7 +405,10 @@ def estimate_posterior_vi(signals    : dict,
     # covariance-linearisation - a natural, better-motivated alternative
     # enabled by having real samples.
     # ------------------------------------------------------------------
-    sig_coarse = signals['coarse']
+    # signals is a list of per-run structs for a multi-run joint fit (see
+    # core.cost's module docstring) - any run's coarse/t_h grid works here
+    # since T_h/T_c are shared across runs by construction.
+    sig_coarse = signals[0]['coarse'] if isinstance(signals, list) else signals['coarse']
     t_h_nd     = sig_coarse['t_h'] / T_c
     t_eval_nd  = jnp.linspace(0.0, float(t_h_nd[-1]), n_eval_pts)
 

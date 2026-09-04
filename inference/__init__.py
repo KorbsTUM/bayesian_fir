@@ -45,3 +45,9 @@ from inference.variational import (
     VIConfig,
     estimate_posterior_vi,
 )
+
+from inference.multirun import (
+    MultiRunConfig,
+    MultiRunResult,
+    infer_impulse_response_multirun,
+)
