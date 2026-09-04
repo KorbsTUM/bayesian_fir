@@ -25,10 +25,14 @@ Laplace, so a cheap Laplace sweep across candidate orders followed by one
 VI fit only at the winning order avoids paying VI's cost once per
 candidate order.
 
+By default both versions are fit and an IR + FTF comparison plot is saved
+under examples/outputs/ (spray_ir_comparison.png, spray_ftf_comparison.png).
+
 Usage:
+    python examples/run_spray_multirun.py
     python examples/run_spray_multirun.py --version V3
     python examples/run_spray_multirun.py --version V4 --ranking-method laplace --param-method vi
-    python examples/run_spray_multirun.py --version V3 --model-orders 1 2 3 --mcmc
+    python examples/run_spray_multirun.py --model-orders 1 2 3 --mcmc
 """
 
 import argparse
@@ -41,15 +45,23 @@ sys.path.insert(0, str(REPO_ROOT))
 import jax
 jax.config.update("jax_enable_x64", True)
 
+import numpy as np
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+
 from utils.io import load_raw_npy
+from utils.plotting import get_colours, errorpatch
 from core.prior import PriorConfig
+from core.ftf import calculate_ftf
 from config.defaults import PreprocConfig
 from inference.optimizer import OptimizerConfig
 from inference.variational import VIConfig
-from inference.multirun import MultiRunConfig, infer_impulse_response_multirun
+from inference.multirun import MultiRunConfig, MultiRunResult, infer_impulse_response_multirun
 
-DATA_ROOT = REPO_ROOT / "data"
-RUN_NAMES = ["run1", "run2", "run3"]
+DATA_ROOT   = REPO_ROOT / "data"
+OUTPUT_DIR  = REPO_ROOT / "examples" / "outputs"
+RUN_NAMES   = ["run1", "run2", "run3"]
+VERSION_COLOUR = {"V3": get_colours(4), "V4": get_colours(3)}
 
 # Confirmed shared across all runs of both SprayV3 and SprayV4.
 L_REF = 7.14e-2   # reference length [m]
@@ -71,12 +83,93 @@ def load_version(version: str, dt: float):
     return u_list, q_list, t_list
 
 
+def run_version(version: str, args) -> MultiRunResult:
+    T_c = args.l_ref / args.u_ref
+
+    print(f"\nLoading Spray{version} (3 runs)...")
+    u_list, q_list, t_list = load_version(version, args.dt)
+
+    preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
+    opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel)
+
+    config = MultiRunConfig(
+        prior             = PriorConfig(),
+        preproc           = preproc_cfg,
+        ranking_method    = args.ranking_method,
+        ranking_optimizer = opt_cfg,
+        param_method      = args.param_method,
+        run_mcmc          = args.mcmc,
+        mcmc_iter         = args.mcmc_iter,
+        verbose           = True,
+    )
+
+    result = infer_impulse_response_multirun(
+        u_list, q_list, t_list, T_c,
+        model_orders=args.model_orders, config=config, run_names=RUN_NAMES)
+
+    print(f"\nDone. Spray{version}: shared N = {result.N_star}, "
+          f"method = {result.best.method}")
+    return result
+
+
+def plot_ir_comparison(results: dict, out_path: Path):
+    """Impulse response h(t), MAP mean +/- 95% band, for each version."""
+    print("\n=== Impulse response comparison ===")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for version, result in results.items():
+        h = result.best.h
+        t_ms = np.asarray(h.time) * 1e3
+        band = 1.96 * np.sqrt(np.asarray(h.var))
+        errorpatch(ax, t_ms, h.val, band, band,
+                   color=VERSION_COLOUR[version],
+                   line_kwargs={'label': f"Spray{version} (N={result.N_star}, "
+                                          f"{result.best.method})"})
+    ax.set_xlabel('time [ms]')
+    ax.set_ylabel('h(t)')
+    ax.legend(frameon=False)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
+
+
+def plot_ftf_comparison(results: dict, out_path: Path):
+    """FTF gain/phase, MAP +/- 95% credible band, for each version."""
+    print("\n=== FTF comparison ===")
+    omega = jnp.linspace(0.0, 2 * jnp.pi * 500, 200)
+    freq  = omega / (2 * jnp.pi)
+
+    fig, (ax_gain, ax_phase) = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
+    for version, result in results.items():
+        ftf   = calculate_ftf(result.best.a_map, omega, result.best.Ca_map)
+        color = VERSION_COLOUR[version]
+        label = f"Spray{version} (N={result.N_star}, {result.best.method})"
+        errorpatch(ax_gain, freq, ftf['gain'], ftf['gain95lo'], ftf['gain95hi'],
+                   color=color, line_kwargs={'label': label})
+        errorpatch(ax_phase, freq, ftf['phase'], ftf['phase95lo'], ftf['phase95hi'],
+                   color=color)
+    ax_gain.set_ylabel('|F|')
+    ax_gain.legend(frameon=False)
+    ax_gain.grid(True, alpha=0.3)
+    ax_phase.set_ylabel('phase [rad]')
+    ax_phase.set_xlabel('frequency [Hz]')
+    ax_phase.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--version", choices=["V3", "V4"], default="V3",
-        help="Spray burner version to fit (default: V3).")
+        "--version", choices=["V3", "V4", "both"], default="both",
+        help="Spray burner version(s) to fit (default: both, needed for the "
+             "IR/FTF comparison plots).")
     parser.add_argument(
         "--model-orders", type=int, nargs="+", default=[1, 2, 3],
         help="Candidate model orders for the joint-evidence sweep (default: 1 2 3).")
@@ -118,33 +211,19 @@ def main():
         "--no-parallel", action="store_true",
         help="Disable vmap-parallel restarts (Python for-loop instead); "
              "useful for debugging on CPU.")
+    parser.add_argument(
+        "--no-plots", action="store_true",
+        help="Skip the IR/FTF comparison plots (just print the fit summaries).")
     args = parser.parse_args()
 
-    T_c = args.l_ref / args.u_ref
+    versions = ["V3", "V4"] if args.version == "both" else [args.version]
+    results = {version: run_version(version, args) for version in versions}
 
-    print(f"Loading Spray{args.version} (3 runs)...")
-    u_list, q_list, t_list = load_version(args.version, args.dt)
+    if not args.no_plots:
+        plot_ir_comparison(results, OUTPUT_DIR / "spray_ir_comparison.png")
+        plot_ftf_comparison(results, OUTPUT_DIR / "spray_ftf_comparison.png")
 
-    preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
-    opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel)
-
-    config = MultiRunConfig(
-        prior             = PriorConfig(),
-        preproc           = preproc_cfg,
-        ranking_method    = args.ranking_method,
-        ranking_optimizer = opt_cfg,
-        param_method      = args.param_method,
-        run_mcmc          = args.mcmc,
-        mcmc_iter         = args.mcmc_iter,
-        verbose           = True,
-    )
-
-    result = infer_impulse_response_multirun(
-        u_list, q_list, t_list, T_c,
-        model_orders=args.model_orders, config=config, run_names=RUN_NAMES)
-
-    print(f"\nDone. Spray{args.version}: shared N = {result.N_star}, "
-          f"method = {result.best.method}")
+    print("\nDone.")
 
 
 if __name__ == "__main__":
