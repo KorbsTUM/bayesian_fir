@@ -220,6 +220,17 @@ def main():
              "in this script, not a flag; only the fixed value is "
              "configurable.")
     parser.add_argument(
+        "--param-t-h", type=float, default=0.025,
+        help="Fixed T_h [s] override for stage 2 only (default: 0.025 = "
+             "25 ms). Several cases in this dataset have a small enough "
+             "T_c that the automatic, order-scaled T_h (t_max(N) * T_c, "
+             "same one stage 1 still uses unmodified) undershoots the "
+             "impulse response's real physical extent - see "
+             "inference/pooled.py's PooledInferenceConfig.param_prior "
+             "docstring for why this is only safe to fix at stage 2, not "
+             "in stage 1's multi-order ranking sweep. Pass 0 to disable "
+             "and use the automatic per-order T_h for stage 2 too.")
+    parser.add_argument(
         "--mcmc", action="store_true",
         help="Run MCMC validation in stage 2 (once per dataset, at the "
              "shared N_star). Off by default.")
@@ -245,8 +256,11 @@ def main():
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel, infer_noise=False)
 
+    param_prior = PriorConfig(T_h=args.param_t_h) if args.param_t_h else None
+
     config = PooledInferenceConfig(
         prior             = PriorConfig(),
+        param_prior       = param_prior,
         preproc           = preproc_cfg,
         ranking_method    = args.method,
         ranking_optimizer = opt_cfg,

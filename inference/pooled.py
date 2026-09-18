@@ -44,6 +44,20 @@ through the prior. Per-dataset noise handling (Ce0/infer_noise) can still
 differ per dataset via DatasetSpec, since that's orthogonal to the shared
 prior.
 
+config.param_prior lets stage 2 use a *different* PriorConfig than stage 1
+(default: same as config.prior). This exists for prior_cfg.T_h overrides
+specifically: infer_impulse_response refuses a fixed T_h together with
+more than one candidate model order (a fixed window would bias the order
+comparison - see its own guard, Section 4.4 of Yoko & Polifke 2026), so a
+fixed T_h can never be used in stage 1's multi-order sweep. Stage 2 always
+fits a single order (model_orders=[N_star]), so that guard never fires
+there - a fixed prior_cfg.T_h in param_prior is a safe way to give every
+dataset a generous, non-order-dependent fitting window for the final
+parameter fit, without touching stage 1's ranking at all (e.g. for a pool
+where some datasets' T_c is small enough that the automatic, order-scaled
+T_h undershoots their impulse response's real physical extent - see
+examples/generate_kornilov_new_figures.py's --param-T-h).
+
 Output volume: with potentially many datasets, per-dataset
 InferenceConfig.verbose is always forced to False here regardless of
 PooledInferenceConfig.verbose (letting every dataset print its full
@@ -135,6 +149,14 @@ class PooledInferenceConfig:
     prior             : PriorConfig       Shared across all datasets (see
                                           module docstring for why this is
                                           the physically correct default).
+                                          Used for stage 1 always, and for
+                                          stage 2 too unless param_prior is
+                                          set.
+    param_prior       : PriorConfig or None   Stage-2-only prior override.
+                                          None -> prior. See module
+                                          docstring for why this is the
+                                          only safe place to fix
+                                          prior_cfg.T_h in a pooled run.
     preproc           : PreprocConfig or None   Shared downsampling settings.
                                           None -> PreprocConfig() (no
                                           downsampling), resolved lazily by
@@ -168,6 +190,7 @@ class PooledInferenceConfig:
                                           module docstring's "Output volume".
     """
     prior             : PriorConfig             = field(default_factory=PriorConfig)
+    param_prior       : Optional[PriorConfig]   = None   # None -> prior
     preproc           : Optional[PreprocConfig] = None   # None -> PreprocConfig(), resolved lazily
     ranking_method    : str                     = 'laplace'
     ranking_optimizer : OptimizerConfig         = field(default_factory=OptimizerConfig)
@@ -404,6 +427,7 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
     param_method = config.param_method    or config.ranking_method
     param_opt    = config.param_optimizer or config.ranking_optimizer
     param_vi     = config.param_vi        or config.ranking_vi
+    param_prior  = config.param_prior     if config.param_prior is not None else config.prior
 
     # ------------------------------------------------------------------
     # Stage 1: ranking sweep - every dataset x every candidate order
@@ -453,7 +477,7 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
     param_results = []
     for spec in datasets:
         cfg = _dataset_inference_config(
-            spec, config.prior, preproc_cfg,
+            spec, param_prior, preproc_cfg,
             param_method, param_opt, param_vi,
             config.Ce0, config.n_eval_pts,
             run_mcmc  = config.run_mcmc,
