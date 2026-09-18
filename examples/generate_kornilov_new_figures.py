@@ -215,10 +215,30 @@ def main():
              "choice, this script applies one uniform choice everywhere.")
     parser.add_argument(
         "--ce0", type=float, default=4e-7,
-        help="Fixed noise variance (default: 4e-7). All cases are "
-             "treated as noise-free here - infer_noise=False is hardcoded "
-             "in this script, not a flag; only the fixed value is "
-             "configurable.")
+        help="Pool-wide fallback noise variance (default: 4e-7), used only "
+             "when --ce0-alpha 0 disables the per-case scaling below. All "
+             "cases are treated as noise-free here - infer_noise=False is "
+             "hardcoded in this script, not a flag; only the fixed value "
+             "is configurable.")
+    parser.add_argument(
+        "--ce0-alpha", type=float, default=0.01,
+        help="Per-case Ce0 = alpha * var(q_i), overriding --ce0 for every "
+             "case (default alpha: 0.0197). q is normalised per case "
+             "((q-mean)/mean) before fitting, so a single flat --ce0 "
+             "implicitly assumes a different *relative* noise fraction "
+             "for every case depending on how strong that case's own "
+             "output fluctuation is - e.g. at --ce0=4e-7, C12 (weak "
+             "signal, var(q)~7e-6) was getting ~5.7%% of its variance "
+             "treated as noise vs. C18's ~0.2%% (var(q)~1.9e-4), making "
+             "C12's evidence-based fit far more conservative about small "
+             "features than C18's. Scaling by each case's own var(q) "
+             "puts every case on the same relative noise footing instead. "
+             "The default 0.0197 is this dataset's own median Ce0/var(q) "
+             "ratio at the old flat --ce0=4e-7 (i.e. matches a typical "
+             "already-well-behaved case, e.g. C01, almost exactly - "
+             "chosen so this default reproduces the old fit for most "
+             "cases and only really changes the outliers). Pass 0 to "
+             "disable and use the flat --ce0 for every case instead.")
     parser.add_argument(
         "--param-t-h", type=float, default=0.025,
         help="Fixed T_h [s] override for stage 2 only (default: 0.025 = "
@@ -252,6 +272,12 @@ def main():
     print("Loading Kornilov (new) datasets...")
     datasets = load_all_kornilov_datasets(cases=args.cases)
     print(f"  {len(datasets)} cases: {[d.name for d in datasets]}")
+
+    if args.ce0_alpha > 0:
+        datasets = [d._replace(Ce0=args.ce0_alpha * float(np.var(d.q))) for d in datasets]
+        ce0_vals = [d.Ce0 for d in datasets]
+        print(f"  per-case Ce0 = {args.ce0_alpha:g} * var(q_i)  "
+              f"(range: {min(ce0_vals):.3e} - {max(ce0_vals):.3e})")
 
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel, infer_noise=False)
