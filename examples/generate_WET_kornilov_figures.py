@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-examples/generate_kornilov_figures.py
-=======================================
+examples/generate_WET_kornilov_figures.py
+===========================================
 In the spirit of the original MATLAB generateFigures.m: run the full
 Bayesian DTD analysis across all 20 WET Kornilov cases and compare the
 result against an independent SysID (TFDSI.m) impulse-response estimate,
@@ -14,7 +14,24 @@ comparison: Laplace everywhere (both the shared-N ranking sweep and the
 per-dataset parameter fit - see inference/pooled.py's module docstring
 for why mixing methods across dataset in a summed logML would be
 unsound), all 20 cases treated as noise-free (Ce held fixed, not
-estimated - see --ce0), and MCMC validation available but off by default.
+estimated - see --ce0-alpha/--ce0), and MCMC validation available but
+off by default.
+
+Ce0 and T_h handling mirror examples/generate_base_kornilov_figures.py
+(worked out there first, for the plain Kornilov dataset, then carried
+over here): --ce0-alpha scales each case's fixed noise variance by its
+own var(q) rather than using one flat value pool-wide (q is normalised
+per case before fitting, so a flat Ce0 implicitly means a different
+*relative* noise fraction per case depending on how strong that case's
+own output fluctuation is), and --param-t-h-floor raises stage 2's
+per-case fitting window only where the automatic, order-scaled T_h
+would otherwise undershoot (small-T_c cases at a high enough shared N) -
+see inference/pooled.py's PooledInferenceConfig.param_T_h_floor
+docstring for why a single flat T_h override is unsafe (it can
+undershoot a *large*-T_c case instead, once T_c varies as much as it
+does across these 20 cases - observed in practice on the sibling
+Kornilov dataset: fine in stage 1, numerically degenerate in stage 2
+once a flat window replaced a much larger automatic one).
 
 Steps:
     1. Load all 20 WET Kornilov cases (data.WET_Kornilov.loader).
@@ -31,10 +48,10 @@ Steps:
        (correlation, RMSE) against the SysID reference.
 
 Usage:
-    python examples/generate_kornilov_figures.py
-    python examples/generate_kornilov_figures.py --model-orders 1 2 3 4
-    python examples/generate_kornilov_figures.py --mcmc --mcmc-iter 200000
-    python examples/generate_kornilov_figures.py --subsets U_const --wgr WGR0 WGR231
+    python examples/generate_WET_kornilov_figures.py
+    python examples/generate_WET_kornilov_figures.py --model-orders 1 2 3 4
+    python examples/generate_WET_kornilov_figures.py --mcmc --mcmc-iter 200000
+    python examples/generate_WET_kornilov_figures.py --subsets U_const --wgr WGR0 WGR231
 
 Output:
     examples/outputs/kornilov_bayesian_vs_sysid.png
@@ -208,10 +225,41 @@ def main():
              "choice, this script applies one uniform choice everywhere.")
     parser.add_argument(
         "--ce0", type=float, default=1e-5,
-        help="Fixed noise variance (default: 1e-5). All 20 cases are "
-             "treated as noise-free here - infer_noise=False is hardcoded "
-             "in this script, not a flag; only the fixed value is "
-             "configurable.")
+        help="Pool-wide fallback noise variance (default: 1e-5), used only "
+             "when --ce0-alpha 0 disables the per-case scaling below. All "
+             "20 cases are treated as noise-free here - infer_noise=False "
+             "is hardcoded in this script, not a flag; only the fixed "
+             "value is configurable.")
+    parser.add_argument(
+        "--ce0-alpha", type=float, default=0.005,
+        help="Per-case Ce0 = alpha * var(q_i), overriding --ce0 for every "
+             "case (default alpha: 0.005 - same value calibrated for "
+             "examples/generate_base_kornilov_figures.py's Kornilov "
+             "dataset; kept identical here for consistency between the "
+             "two scripts rather than re-tuned per dataset). q is "
+             "normalised per case ((q-mean)/mean) before fitting, so a "
+             "single flat --ce0 implicitly assumes a different *relative* "
+             "noise fraction per case depending on how strong that case's "
+             "own output fluctuation is. Pass 0 to disable and use the "
+             "flat --ce0 for every case instead.")
+    parser.add_argument(
+        "--param-t-h-floor", type=float, default=0.025,
+        help="Minimum T_h [s] for stage 2 only (default: 0.025 = 25 ms) - "
+             "NOT a flat override: stage 2 uses, per case, max(automatic "
+             "T_h at N_star, this floor). All 20 WET Kornilov cases ship "
+             "a fixed 200-tap, dt=1e-4s SysID reference (20 ms span), and "
+             "several cases' automatic T_h (t_max(N) * T_c, same one "
+             "stage 1 always uses unmodified) falls well under that at "
+             "low-to-moderate N (e.g. U_const_WGR0/P_const_WGR0: T_c < "
+             "0.6 ms), so the floor is set at 20 ms + 25%% margin. Large-T_c "
+             "cases (e.g. df_const_WGR0: automatic T_h already 36-50 ms "
+             "across N=3-5) are left untouched, since the floor only ever "
+             "raises, never lowers, the per-case window - see "
+             "inference/pooled.py's PooledInferenceConfig.param_T_h_floor "
+             "docstring for why a flat override instead of a floor risks "
+             "the opposite failure (undershooting a large-T_c case at a "
+             "high enough N). Pass 0 to disable and use the automatic "
+             "per-order, per-case T_h for stage 2 too.")
     parser.add_argument(
         "--mcmc", action="store_true",
         help="Run MCMC validation in stage 2 (once per dataset, at the "
@@ -235,11 +283,18 @@ def main():
     datasets = load_all_kornilov_datasets(subsets=args.subsets, wgr_labels=args.wgr)
     print(f"  {len(datasets)} cases: {[d.name for d in datasets]}")
 
+    if args.ce0_alpha > 0:
+        datasets = [d._replace(Ce0=args.ce0_alpha * float(np.var(d.q))) for d in datasets]
+        ce0_vals = [d.Ce0 for d in datasets]
+        print(f"  per-case Ce0 = {args.ce0_alpha:g} * var(q_i)  "
+              f"(range: {min(ce0_vals):.3e} - {max(ce0_vals):.3e})")
+
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel, infer_noise=False)
 
     config = PooledInferenceConfig(
         prior             = PriorConfig(),
+        param_T_h_floor   = args.param_t_h_floor if args.param_t_h_floor else None,
         preproc           = preproc_cfg,
         ranking_method    = args.method,
         ranking_optimizer = opt_cfg,
@@ -252,6 +307,10 @@ def main():
     result = infer_shared_model_order(datasets, args.model_orders, config)
 
     print(f"\nShared model order across {len(datasets)} datasets: N = {result.N_star}")
+    if result.stage2_excluded:
+        print(f"WARNING: {len(result.stage2_excluded)} case(s) excluded from "
+              f"the figure/summary below (degenerate stage-2 fit at "
+              f"N={result.N_star}): {result.stage2_excluded}")
 
     plot_comparison_grid(result, OUTPUT_DIR / "kornilov_bayesian_vs_sysid.png")
     save_summary_csv(result, OUTPUT_DIR / "kornilov_bayesian_vs_sysid_summary.csv")

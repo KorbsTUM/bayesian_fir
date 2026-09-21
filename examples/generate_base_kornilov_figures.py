@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-examples/generate_kornilov_new_figures.py
-============================================
+examples/generate_base_kornilov_figures.py
+==========================================
 Bayesian DTD analysis across the 20 (new, plain) Kornilov cases
 (data/Kornilov/, C01-C20 - see data/Kornilov/metadata.py for provenance
 of the per-case L_ref/U_ref used to build T_c). Modelled on
-examples/generate_kornilov_figures.py (the WET_Kornilov analogue), with
+examples/generate_WET_kornilov_figures.py (the WET_Kornilov analogue), with
 one difference forced by what this dataset actually has: no
 series/water-gas-ratio structure - the 20 cases are independent flame
 conditions, not organised into subsets x WGR, so the plot grid is just
@@ -15,12 +15,12 @@ Each case ships a SysID reference impulse response (fir_sysid.csv -
 curated from .../Kornilov_timeseries/SysID/System Identification/FIRs/
 FIR_{case}.txt) via data.Kornilov.loader.load_kornilov_fir_sysid, overlaid
 on the Bayesian fit and scored (correlation, RMSE) same as
-generate_kornilov_figures.py does for WET_Kornilov. That loader still
+generate_WET_kornilov_figures.py does for WET_Kornilov. That loader still
 returns None (not raising) for any case missing a fir_sysid.csv, so this
 script tolerates a partially-covered dataset - a future case can be added
 without its own SysID reference and will just plot Bayesian-only.
 
-As in generate_kornilov_figures.py: Laplace everywhere (both the shared-N
+As in generate_WET_kornilov_figures.py: Laplace everywhere (both the shared-N
 ranking sweep and the per-dataset parameter fit - see inference/pooled.py's
 module docstring for why mixing methods across datasets in a summed logML
 would be unsound), all 20 cases treated as noise-free by default (Ce held
@@ -40,10 +40,10 @@ Steps:
        (correlation, RMSE) where a reference is available.
 
 Usage:
-    python examples/generate_kornilov_new_figures.py
-    python examples/generate_kornilov_new_figures.py --model-orders 1 2 3 4
-    python examples/generate_kornilov_new_figures.py --mcmc --mcmc-iter 200000
-    python examples/generate_kornilov_new_figures.py --cases C01 C02 C03
+    python examples/generate_base_kornilov_figures.py
+    python examples/generate_base_kornilov_figures.py --model-orders 1 2 3 4
+    python examples/generate_base_kornilov_figures.py --mcmc --mcmc-iter 200000
+    python examples/generate_base_kornilov_figures.py --cases C01 C02 C03
 
 Output:
     examples/outputs/kornilov_new_bayesian.png
@@ -84,7 +84,7 @@ def bayesian_h_on_sysid_grid(best, T_c, t_sysid):
     """
     Evaluate the Bayesian impulse response at the SysID reference's own
     time grid, so the two curves sit on identical x-axes with no
-    resampling. See examples/generate_kornilov_figures.py's identically
+    resampling. See examples/generate_WET_kornilov_figures.py's identically
     named helper for the full rationale (unchanged here).
 
     Returns (h_val, h_std) - h_std is the pointwise Gaussian marginal std
@@ -101,7 +101,7 @@ def sysid_h_continuous(fir):
     """
     Convert a curated SysID reference (discrete FIR taps) to the same
     continuous-time impulse-response *density* convention this codebase's
-    Bayesian h(t) uses. See examples/generate_kornilov_figures.py's
+    Bayesian h(t) uses. See examples/generate_WET_kornilov_figures.py's
     identically named helper for the full derivation/validation (unchanged
     here) - raw SysID taps need dividing by dt_sysid to become comparable
     to h(t).
