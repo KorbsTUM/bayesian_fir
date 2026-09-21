@@ -45,18 +45,40 @@ differ per dataset via DatasetSpec, since that's orthogonal to the shared
 prior.
 
 config.param_prior lets stage 2 use a *different* PriorConfig than stage 1
-(default: same as config.prior). This exists for prior_cfg.T_h overrides
-specifically: infer_impulse_response refuses a fixed T_h together with
-more than one candidate model order (a fixed window would bias the order
-comparison - see its own guard, Section 4.4 of Yoko & Polifke 2026), so a
-fixed T_h can never be used in stage 1's multi-order sweep. Stage 2 always
-fits a single order (model_orders=[N_star]), so that guard never fires
-there - a fixed prior_cfg.T_h in param_prior is a safe way to give every
-dataset a generous, non-order-dependent fitting window for the final
-parameter fit, without touching stage 1's ranking at all (e.g. for a pool
-where some datasets' T_c is small enough that the automatic, order-scaled
-T_h undershoots their impulse response's real physical extent - see
-examples/generate_kornilov_new_figures.py's --param-T-h).
+(default: same as config.prior).
+
+config.param_T_h_floor addresses a specific problem: some pools have
+datasets whose T_c varies enough that the automatic, order-scaled T_h =
+t_max(N_star) * T_c undershoots a small-T_c dataset's real impulse
+response extent (cutting its stage-2 fit off early) - the fix isn't to
+fix T_h to one literal value (which infer_impulse_response refuses
+together with more than one candidate model order anyway, since a fixed
+window would bias stage 1's order comparison - Section 4.4 of Yoko &
+Polifke 2026), because a single flat number then *undershoots in the
+other direction* for a large-T_c dataset at a higher order: its own
+automatic T_h can be several times the flat value, and forcing a much
+shorter absolute window onto more parameters (higher N) is exactly the
+kind of overparameterized-for-its-support situation that leaves the
+Laplace Hessian ill-conditioned (see DegenerateFitError below - this is
+exactly what was observed with the WET_Kornilov-style Kornilov pool:
+fine in stage 1 at N=4 for a large-T_c case, NaN in stage 2 once a flat
+25ms window replaced the automatic ~81ms one). So instead,
+param_T_h_floor only raises the floor: for each dataset, stage 2 uses
+max(t_max(N_star, param_prior) * spec.T_c, param_T_h_floor) - large-T_c
+datasets keep their own (already generous) automatic window untouched,
+and only small-T_c datasets whose automatic window falls under the floor
+get lifted up to it. Requires param_prior.T_h (or prior.T_h, if
+param_prior is unset) to be None - it's ill-defined to take a max against
+an already-fixed T_h.
+
+Stage 2 also tolerates a single dataset's fit going numerically
+degenerate at N_star (DegenerateFitError from inference.posterior,
+raised when infer_impulse_response's single candidate order comes back
+NaN): that dataset is skipped (warned about, excluded from
+param_results/dataset_names, and listed in PooledInferenceResult.
+stage2_excluded) rather than aborting the whole pool's stage 2 - mirrors
+how PooledModelRanking already tolerates a NaN cell in stage 1's sweep,
+which stage 2 had no equivalent for previously.
 
 Output volume: with potentially many datasets, per-dataset
 InferenceConfig.verbose is always forced to False here regardless of
@@ -76,15 +98,16 @@ core files, deliberately deferred rather than built here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, NamedTuple, Optional, TYPE_CHECKING
 
 import numpy as np
 import jax
 import jax.numpy as jnp
 
-from core.prior import PriorConfig
+from core.prior import PriorConfig, estimate_t_max
 from inference.optimizer import OptimizerConfig
+from inference.posterior import DegenerateFitError
 from inference.variational import VIConfig
 
 if TYPE_CHECKING:
@@ -153,10 +176,22 @@ class PooledInferenceConfig:
                                           stage 2 too unless param_prior is
                                           set.
     param_prior       : PriorConfig or None   Stage-2-only prior override.
-                                          None -> prior. See module
-                                          docstring for why this is the
-                                          only safe place to fix
-                                          prior_cfg.T_h in a pooled run.
+                                          None -> prior.
+    param_T_h_floor   : float or None     Stage-2-only minimum T_h [s].
+                                          None -> stage 2 uses param_prior's
+                                          (or prior's) T_h/automatic
+                                          Fenton-Wilkinson estimate
+                                          unmodified, same as stage 1.
+                                          When set, stage 2 instead uses,
+                                          per dataset, max(automatic T_h at
+                                          N_star, param_T_h_floor) - see
+                                          module docstring for why this
+                                          (not a single fixed T_h) is the
+                                          safe way to raise a too-short
+                                          automatic window without
+                                          under-cutting datasets whose own
+                                          automatic window is already
+                                          larger than the floor.
     preproc           : PreprocConfig or None   Shared downsampling settings.
                                           None -> PreprocConfig() (no
                                           downsampling), resolved lazily by
@@ -191,6 +226,7 @@ class PooledInferenceConfig:
     """
     prior             : PriorConfig             = field(default_factory=PriorConfig)
     param_prior       : Optional[PriorConfig]   = None   # None -> prior
+    param_T_h_floor   : Optional[float]         = None
     preproc           : Optional[PreprocConfig] = None   # None -> PreprocConfig(), resolved lazily
     ranking_method    : str                     = 'laplace'
     ranking_optimizer : OptimizerConfig         = field(default_factory=OptimizerConfig)
@@ -325,14 +361,27 @@ class PooledInferenceResult:
                                            Stage-2 result per dataset (a
                                            single order, N_star). `.best`
                                            on each is the final per-dataset
-                                           PosteriorResult.
-    dataset_names   : list of str
+                                           PosteriorResult. Only datasets
+                                           that fit successfully at N_star
+                                           are included - see
+                                           stage2_excluded.
+    dataset_names   : list of str         Names matching param_results,
+                                           row for row (NOT necessarily
+                                           all input datasets - see
+                                           stage2_excluded).
+    stage2_excluded : list of str         Names of datasets whose stage-2
+                                           fit at N_star was numerically
+                                           degenerate (DegenerateFitError)
+                                           and were skipped rather than
+                                           aborting the whole pool. Empty
+                                           in the common case.
     """
     N_star          : int
     pooled_ranking  : PooledModelRanking
     ranking_results : List[InferenceResult]
     param_results   : List[InferenceResult]
     dataset_names   : List[str]
+    stage2_excluded : List[str] = field(default_factory=list)
 
     def per_dataset(self, name: str):
         """Return the final PosteriorResult (stage 2, at N_star) for a dataset by name."""
@@ -474,10 +523,32 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
         print(f"\n=== Stage 2: parameter fit at N={N_star} ({param_method}) - "
               f"{len(datasets)} datasets ===")
 
-    param_results = []
+    # param_T_h_floor: see module docstring. Computed once (t_max is pure
+    # prior-space, independent of T_c) and combined with each dataset's
+    # own T_c below.
+    t_max_star = None
+    if config.param_T_h_floor is not None:
+        if param_prior.T_h is not None:
+            raise ValueError(
+                "config.param_T_h_floor requires param_prior.T_h (or "
+                "prior.T_h, if param_prior is unset) to be None - it "
+                "computes each dataset's T_h from the automatic "
+                "Fenton-Wilkinson estimate at N_star and takes the max "
+                "against the floor, which is ill-defined when T_h is "
+                "already fixed to a single literal value.")
+        t_max_star = estimate_t_max(N_star, param_prior)
+
+    param_results   = []
+    param_names     = []
+    stage2_excluded = []
     for spec in datasets:
+        dataset_prior = param_prior
+        if t_max_star is not None:
+            T_h_i = max(t_max_star * spec.T_c, config.param_T_h_floor)
+            dataset_prior = replace(param_prior, T_h=T_h_i)
+
         cfg = _dataset_inference_config(
-            spec, param_prior, preproc_cfg,
+            spec, dataset_prior, preproc_cfg,
             param_method, param_opt, param_vi,
             config.Ce0, config.n_eval_pts,
             run_mcmc  = config.run_mcmc,
@@ -486,22 +557,37 @@ def infer_shared_model_order(datasets     : List[DatasetSpec],
             mcmc_thin = config.mcmc_thin,
             mcmc_seed = config.mcmc_seed,
             mcmc_scan = config.mcmc_scan)
-        result = infer_impulse_response(
-            spec.u, spec.q, spec.t, spec.T_c,
-            model_orders=[N_star], config=cfg)
+        try:
+            result = infer_impulse_response(
+                spec.u, spec.q, spec.t, spec.T_c,
+                model_orders=[N_star], config=cfg)
+        except DegenerateFitError as e:
+            print(f"  WARNING: [{spec.name}] stage-2 fit at N={N_star} was "
+                  f"numerically degenerate - skipped, excluded from "
+                  f"results ({e}).")
+            stage2_excluded.append(spec.name)
+            jax.clear_caches()   # see stage 1's comment above
+            continue
         param_results.append(result)
+        param_names.append(spec.name)
         if config.verbose:
             a = np.asarray(result.best.a_map)
             mcmc_note = ""
             if result.mcmc is not None:
                 mcmc_note = f"  MCMC accept={result.mcmc.accept_rate:.1%}"
-            print(f"  [{spec.name}] Ce={result.best.Ce:.3e}  n_1={a[0]:+.3f}{mcmc_note}")
+            t_h_note = f"  T_h={T_h_i*1e3:.1f}ms" if t_max_star is not None else ""
+            print(f"  [{spec.name}] Ce={result.best.Ce:.3e}  n_1={a[0]:+.3f}{t_h_note}{mcmc_note}")
         jax.clear_caches()   # see stage 1's comment above
+
+    if stage2_excluded and config.verbose:
+        print(f"\n  {len(stage2_excluded)} dataset(s) excluded from stage-2 "
+              f"results due to a degenerate fit at N={N_star}: {stage2_excluded}")
 
     return PooledInferenceResult(
         N_star          = N_star,
         pooled_ranking  = pooled_ranking,
         ranking_results = ranking_results,
         param_results   = param_results,
-        dataset_names   = [s.name for s in datasets],
+        dataset_names   = param_names,
+        stage2_excluded = stage2_excluded,
     )

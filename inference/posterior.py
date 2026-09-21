@@ -57,6 +57,20 @@ from inference.optimizer import (OptimizerConfig,
 # Output containers
 # ---------------------------------------------------------------------------
 
+class DegenerateFitError(ValueError):
+    """
+    Raised by ModelRanking when every candidate order's logML is NaN (the
+    Laplace covariance was numerically degenerate everywhere it was
+    tried). A distinct subclass (rather than a plain ValueError) so
+    callers that specifically want to catch *this* condition - e.g.
+    inference.pooled's stage 2, which calls infer_impulse_response with a
+    single candidate order and would otherwise have no way to tell a
+    degenerate fit apart from a genuine usage error - can do so without
+    string-matching the message or risking swallowing unrelated
+    ValueErrors (bad shapes, T_c <= 0, etc.).
+    """
+
+
 class PosteriorResult:
     """
     Container for the posterior estimate of a single model order.
@@ -162,7 +176,7 @@ class ModelRanking:
 
         nan_mask = jnp.isnan(self.logML)
         if bool(jnp.all(nan_mask)):
-            raise ValueError(
+            raise DegenerateFitError(
                 "logML is NaN for every candidate model order - cannot "
                 "select a best model. Check the optimizer/prior settings "
                 "(a fixed, very small Ce0 combined with an overparameterized "

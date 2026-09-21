@@ -221,7 +221,7 @@ def main():
              "hardcoded in this script, not a flag; only the fixed value "
              "is configurable.")
     parser.add_argument(
-        "--ce0-alpha", type=float, default=0.01,
+        "--ce0-alpha", type=float, default=0.005,
         help="Per-case Ce0 = alpha * var(q_i), overriding --ce0 for every "
              "case (default alpha: 0.0197). q is normalised per case "
              "((q-mean)/mean) before fitting, so a single flat --ce0 "
@@ -240,16 +240,24 @@ def main():
              "cases and only really changes the outliers). Pass 0 to "
              "disable and use the flat --ce0 for every case instead.")
     parser.add_argument(
-        "--param-t-h", type=float, default=0.025,
-        help="Fixed T_h [s] override for stage 2 only (default: 0.025 = "
-             "25 ms). Several cases in this dataset have a small enough "
-             "T_c that the automatic, order-scaled T_h (t_max(N) * T_c, "
-             "same one stage 1 still uses unmodified) undershoots the "
-             "impulse response's real physical extent - see "
-             "inference/pooled.py's PooledInferenceConfig.param_prior "
-             "docstring for why this is only safe to fix at stage 2, not "
-             "in stage 1's multi-order ranking sweep. Pass 0 to disable "
-             "and use the automatic per-order T_h for stage 2 too.")
+        "--param-t-h-floor", type=float, default=0.025,
+        help="Minimum T_h [s] for stage 2 only (default: 0.025 = 25 ms) - "
+             "NOT a flat override: stage 2 uses, per case, max(automatic "
+             "T_h at N_star, this floor). Several cases in this dataset "
+             "have a small enough T_c that the automatic, order-scaled "
+             "T_h (t_max(N) * T_c, same one stage 1 always uses "
+             "unmodified) undershoots the impulse response's real "
+             "physical extent, cutting the stage-2 fit off early - the "
+             "floor lifts only those cases. A large-T_c case's own "
+             "automatic T_h is left untouched whenever it's already above "
+             "the floor (which is usually true) - a single flat T_h "
+             "instead would undershoot such a case at a high enough N "
+             "(observed in practice: fine in stage 1, numerically "
+             "degenerate in stage 2 once a flat window replaced a much "
+             "larger automatic one - see "
+             "inference/pooled.py's PooledInferenceConfig.param_T_h_floor "
+             "docstring). Pass 0 to disable and use the automatic "
+             "per-order, per-case T_h for stage 2 too.")
     parser.add_argument(
         "--mcmc", action="store_true",
         help="Run MCMC validation in stage 2 (once per dataset, at the "
@@ -282,11 +290,9 @@ def main():
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel, infer_noise=False)
 
-    param_prior = PriorConfig(T_h=args.param_t_h) if args.param_t_h else None
-
     config = PooledInferenceConfig(
         prior             = PriorConfig(),
-        param_prior       = param_prior,
+        param_T_h_floor   = args.param_t_h_floor if args.param_t_h_floor else None,
         preproc           = preproc_cfg,
         ranking_method    = args.method,
         ranking_optimizer = opt_cfg,
@@ -299,6 +305,10 @@ def main():
     result = infer_shared_model_order(datasets, args.model_orders, config)
 
     print(f"\nShared model order across {len(datasets)} datasets: N = {result.N_star}")
+    if result.stage2_excluded:
+        print(f"WARNING: {len(result.stage2_excluded)} case(s) excluded from "
+              f"the figure/summary below (degenerate stage-2 fit at "
+              f"N={result.N_star}): {result.stage2_excluded}")
 
     plot_grid(result, OUTPUT_DIR / "kornilov_new_bayesian.png")
     save_summary_csv(result, OUTPUT_DIR / "kornilov_new_summary.csv")
