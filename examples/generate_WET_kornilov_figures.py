@@ -224,6 +224,23 @@ def main():
              "run_pooled_inference.py's independent ranking/param method "
              "choice, this script applies one uniform choice everywhere.")
     parser.add_argument(
+        "--lfl", type=float, default=None,
+        help="Low-frequency (DC/steady-state) gain constraint: a soft "
+             "Gaussian prior pulling sum(n_i) toward this value (see "
+             "core/prior.py's PriorConfig.LFL/core/cost.py's J_LFL term). "
+             "None (default) leaves it unconstrained, i.e. off - matching "
+             "this script's behaviour before this flag existed. Applies "
+             "to BOTH stages automatically (param_prior isn't set "
+             "separately in this script, so stage 2 inherits --lfl/"
+             "--lfl-sigma from stage 1's prior, same as every other "
+             "hyperparameter). LFL=1.0 (unit steady-state gain) is the "
+             "physically appropriate value for this dataset.")
+    parser.add_argument(
+        "--lfl-sigma", type=float, default=0.01,
+        help="Std of the soft LFL constraint (default: 0.01, matching "
+             "PriorConfig.LFL_sigma's own default). Only used when --lfl "
+             "is set.")
+    parser.add_argument(
         "--ce0", type=float, default=1e-5,
         help="Pool-wide fallback noise variance (default: 1e-5), used only "
              "when --ce0-alpha 0 disables the per-case scaling below. All "
@@ -289,11 +306,14 @@ def main():
         print(f"  per-case Ce0 = {args.ce0_alpha:g} * var(q_i)  "
               f"(range: {min(ce0_vals):.3e} - {max(ce0_vals):.3e})")
 
+    if args.lfl is not None:
+        print(f"  LFL constraint: sum(n_i) -> {args.lfl:g}  (sigma={args.lfl_sigma:g})")
+
     preproc_cfg = PreprocConfig(DSmode=args.ds_mode, DSvalue=args.ds_value)
     opt_cfg     = OptimizerConfig(use_parallel=not args.no_parallel, infer_noise=False)
 
     config = PooledInferenceConfig(
-        prior             = PriorConfig(),
+        prior             = PriorConfig(LFL=args.lfl, LFL_sigma=args.lfl_sigma),
         param_T_h_floor   = args.param_t_h_floor if args.param_t_h_floor else None,
         preproc           = preproc_cfg,
         ranking_method    = args.method,
