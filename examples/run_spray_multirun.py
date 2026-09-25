@@ -308,8 +308,12 @@ def main():
             if r_lfl is not None:
                 entries.append((f"Spray{version} LFL={args.lfl} (N={r_lfl.N_star}, "
                                  f"{r_lfl.best.method})", r_lfl, base_color, '--'))
-        plot_ir_comparison(entries, OUTPUT_DIR / "spray_ir_comparison.png")
-        plot_ftf_comparison(entries, OUTPUT_DIR / "spray_ftf_comparison.png")
+        # Tag output filenames with the param-fit method so re-runs under a
+        # different backend (e.g. --param-method vi) don't clobber a
+        # previous comparison's plots.
+        tag = args.param_method or args.ranking_method
+        plot_ir_comparison(entries, OUTPUT_DIR / f"spray_ir_comparison_{tag}.png")
+        plot_ftf_comparison(entries, OUTPUT_DIR / f"spray_ftf_comparison_{tag}.png")
 
     print("\nDone.")
 
